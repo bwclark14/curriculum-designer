@@ -18,10 +18,10 @@
     name: 'Sciences',
     purpose: 'Sciences help learners make sense of the natural and material world, develop the curiosity and skills to investigate it, and make informed, responsible decisions about their health, their communities and the planet.',
     bigIdeas: [
-      'Living things depend on each other and on their environment.',
-      'Energy can be transferred and transformed, but never created or destroyed.',
-      'Matter is made of particles whose arrangement explains its properties.',
-      'Scientific ideas are built from evidence and can change when new evidence emerges.'
+      { name: 'Interdependence', description: 'Living things depend on each other and on their environment.' },
+      { name: 'Energy', description: 'Energy can be transferred and transformed, but never created or destroyed.' },
+      { name: 'Particles and matter', description: 'Matter is made of particles whose arrangement explains its properties.' },
+      { name: 'Evidence', description: 'Scientific ideas are built from evidence and can change when new evidence emerges.' }
     ],
     strands: [
       S('Planet Earth', {
@@ -140,8 +140,8 @@
     name: 'Expressive arts',
     purpose: 'The expressive arts give learners ways to create, present and respond — building confidence, imagination and an appreciation of culture.',
     bigIdeas: [
-      'Creativity grows through exploring, experimenting and taking risks.',
-      'The arts communicate ideas and feelings in ways that words alone cannot.'
+      { name: 'Creative risk', description: 'Creativity grows through exploring, experimenting and taking risks.' },
+      { name: 'Expression', description: 'The arts communicate ideas and feelings in ways that words alone cannot.' }
     ],
     strands: [
       S('Art and design', {

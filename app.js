@@ -3,11 +3,11 @@
 
   /* ---------- constants & helpers ---------- */
   const LEVELS = [
-    { key: 'early',  name: 'Early',  hint: 'Pre-school – P1' },
-    { key: 'first',  name: 'First',  hint: 'To end of P4' },
-    { key: 'second', name: 'Second', hint: 'To end of P7' },
-    { key: 'third',  name: 'Third',  hint: 'S1 – S3' },
-    { key: 'fourth', name: 'Fourth', hint: 'S1 – S3, deeper' }
+    { key: 'early',  name: 'Early' },
+    { key: 'first',  name: 'First' },
+    { key: 'second', name: 'Second' },
+    { key: 'third',  name: 'Third' },
+    { key: 'fourth', name: 'Fourth' }
   ];
   const LV = Object.fromEntries(LEVELS.map(l => [l.key, l]));
   const STORE = 'curriculum-designer.v1';
@@ -28,10 +28,19 @@
       const raw = localStorage.getItem(STORE);
       if (raw) {
         const d = JSON.parse(raw);
-        if (d && Array.isArray(d.areas) && d.areas.length) return d;
+        if (d && Array.isArray(d.areas) && d.areas.length) return normalise(d);
       }
     } catch (e) { /* storage unavailable: fall back to seed */ }
-    return clone(window.SEED);
+    return normalise(clone(window.SEED));
+  }
+  // Older data stored each big idea as a plain string; it is now { name, description }.
+  function normalise(d) {
+    d.areas.forEach(a => {
+      a.bigIdeas = (a.bigIdeas || []).map(b => typeof b === 'string'
+        ? { name: '', description: b }
+        : { name: b.name || '', description: b.description || '' });
+    });
+    return d;
   }
   let savedTimer;
   function save() {
@@ -118,7 +127,10 @@
             ${a.bigIdeas.map((b, i) => `
               <li>
                 <span class="idea-num">${i + 1}</span>
-                <textarea class="autosize" rows="1" data-idea="${i}" aria-label="Big idea ${i + 1}" placeholder="A big idea learners should come to understand">${esc(b)}</textarea>
+                <div class="idea-body">
+                  <input class="idea-name" data-idea="${i}" data-ifield="name" value="${esc(b.name)}" aria-label="Big idea ${i + 1} name" placeholder="Name this big idea">
+                  <textarea class="idea-desc autosize" rows="1" data-idea="${i}" data-ifield="description" aria-label="Big idea ${i + 1} description" placeholder="Describe what learners should come to understand">${esc(b.description)}</textarea>
+                </div>
                 <button class="icon-btn" data-action="del-idea" data-i="${i}" title="Remove big idea" aria-label="Remove big idea ${i + 1}">×</button>
               </li>`).join('')}
           </ol>
@@ -191,7 +203,7 @@
       </div>`;
     }
     const head = `<div class="mh corner"><span>Strands</span><span class="mh-sub">click a name to edit</span></div>` +
-      LEVELS.map(l => `<div class="mh lvl" style="--lc:var(--${l.key})"><span class="lvl-pill">${l.name}</span><small>${l.hint}</small></div>`).join('');
+      LEVELS.map(l => `<div class="mh lvl" style="--lc:var(--${l.key})"><span class="lvl-pill">${l.name}</span></div>`).join('');
     const rows = visibleRows().map(rowHTML).join('');
     return `<div class="matrix-scroll"><div class="matrix">${head}${rows}</div></div>
       <button class="btn add-strand" data-action="add-strand">+ Add strand</button>`;
@@ -253,7 +265,7 @@
     const tabs = LEVELS.map(l => {
       const c = nodes.filter(n => resolve(n.s.id, l.key).status !== 'na').length;
       return `<button class="ltab ${l.key === ui.focus ? 'on' : ''}" style="--lc:var(--${l.key})" data-action="focus" data-level="${l.key}">
-        <b>${l.name}</b><small>${l.hint}</small><span class="ltab-count">${c}/${nodes.length} taught</span></button>`;
+        <b>${l.name}</b><span class="ltab-count">${c}/${nodes.length} taught</span></button>`;
     }).join('');
     if (!a.strands.length) return `<div class="ltabs">${tabs}</div><div class="empty"><p>Add strands in the Strands × Levels view first.</p></div>`;
     const L = LV[ui.focus];
@@ -513,10 +525,10 @@
     'close-drawer'() { ui.drawer = null; renderDrawer(); renderBody(); },
     view(t) { ui.view = t.dataset.view; renderBody(); },
     focus(t) { ui.focus = t.dataset.level; renderBody(); },
-    'add-idea'() { area().bigIdeas.push(''); commit({ hero: true, drawer: false }); const all = $$('#hero [data-idea]'); all[all.length - 1]?.focus(); },
+    'add-idea'() { area().bigIdeas.push({ name: '', description: '' }); commit({ hero: true, drawer: false }); const all = $$('#hero .idea-name'); all[all.length - 1]?.focus(); },
     'del-idea'(t) { area().bigIdeas.splice(+t.dataset.i, 1); commit({ hero: true, drawer: false }); },
     'new-area'() {
-      const a = { id: uid(), name: 'New curriculum area', purpose: '', bigIdeas: [''], strands: [] };
+      const a = { id: uid(), name: 'New curriculum area', purpose: '', bigIdeas: [{ name: '', description: '' }], strands: [] };
       db.areas.push(a); db.currentId = a.id; ui.drawer = null; ui.collapsed.clear();
       save(); render();
       const f = $('#f-name'); f.focus(); f.select();
@@ -530,7 +542,7 @@
     import() { $('#importFile').click(); },
     reset() {
       if (!confirm('Replace everything with the demo data? Your changes will be lost.')) return;
-      db = clone(window.SEED); ui.drawer = null; ui.collapsed.clear(); save(); render();
+      db = normalise(clone(window.SEED)); ui.drawer = null; ui.collapsed.clear(); save(); render();
     }
   };
 
@@ -557,7 +569,7 @@
       area()[t.dataset.field] = t.value; save();
       if (t.dataset.field === 'name') renderTop();
     } else if (t.dataset.idea != null) {
-      area().bigIdeas[+t.dataset.idea] = t.value; save();
+      area().bigIdeas[+t.dataset.idea][t.dataset.ifield] = t.value; save();
     } else if (t.dataset.sfield) {
       idx[ui.drawer.id].s[t.dataset.sfield] = t.value; save(); renderBody();
     } else if (t.dataset.stmt != null) {
@@ -575,7 +587,7 @@
     try {
       const d = JSON.parse(await f.text());
       if (!d || !Array.isArray(d.areas) || !d.areas.length) throw new Error('No curriculum areas found in this file.');
-      db = d; db.currentId ||= d.areas[0].id; ui.drawer = null; save(); render();
+      db = normalise(d); db.currentId ||= d.areas[0].id; ui.drawer = null; save(); render();
     } catch (err) { alert('Could not import: ' + err.message); }
   });
 
