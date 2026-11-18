@@ -378,6 +378,25 @@ body.drawer-open main { padding-right: calc(var(--drawer-w) + 24px); }
   padding: 8px 10px; resize: none; line-height: 1.45; overflow: hidden; background: color-mix(in oklab, var(--lc) 4%, white);
 }
 .stmt-row textarea:focus { outline: none; border-color: var(--lc); box-shadow: 0 0 0 3px color-mix(in oklab, var(--lc) 18%, transparent); }
+.stmt-fields { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.stmt-fields textarea { width: 100%; }
+.sid-field { display: flex; align-items: center; gap: 8px; }
+.sid-field span { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.sid-field input {
+  width: 150px; max-width: 100%; border: 1.5px solid var(--line-strong); border-radius: 8px; padding: 4px 8px;
+  font: 600 13px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface);
+}
+.sid-field input:focus { outline: none; border-color: var(--lc); box-shadow: 0 0 0 3px color-mix(in oklab, var(--lc) 18%, transparent); }
+.dup-warn { margin: 0; font-size: 12px; color: var(--warn); }
+.dup-warn:empty { display: none; }
+
+/* understanding ID shown alongside a statement */
+.sid {
+  display: inline-block; font: 700 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 0 5px; border-radius: 4px; vertical-align: 1px; white-space: nowrap; font-style: normal;
+  color: color-mix(in oklab, var(--lc) 80%, black); background: color-mix(in oklab, var(--lc) 14%, white);
+}
+.stmts.big .sid { font-size: 11.5px; }
 .heirs-box { width: 100%; margin-top: 8px; padding: 12px 14px; border-radius: 10px; background: #f7f4ee; font-size: 13px; }
 .heirs-box ul { margin: 6px 0 0; padding-left: 18px; }
 .heirs-box button { border: 0; background: none; padding: 0; text-decoration: underline; font-weight: 600; }

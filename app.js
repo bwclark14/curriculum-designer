@@ -33,15 +33,25 @@
     } catch (e) { /* storage unavailable: fall back to seed */ }
     return normalise(clone(window.SEED));
   }
-  // Older data stored each big idea as a plain string; it is now { name, description }.
+  // Older data stored big ideas and understanding statements as plain strings;
+  // they are now { name, description } and { code, text }.
   function normalise(d) {
+    const fixStrands = list => (list || []).forEach(s => {
+      Object.values(s.levels || {}).forEach(L => { L.statements = (L.statements || []).map(toStmt); });
+      fixStrands(s.children);
+    });
     d.areas.forEach(a => {
       a.bigIdeas = (a.bigIdeas || []).map(b => typeof b === 'string'
         ? { name: '', description: b }
         : { name: b.name || '', description: b.description || '' });
+      fixStrands(a.strands);
     });
     return d;
   }
+  // Function declarations (not consts) so they are available when load() runs at start-up.
+  function toStmt(t) { return typeof t === 'string' ? { code: '', text: t } : { code: t.code || '', text: t.text || '' }; }
+  function blankStmt() { return { code: '', text: '' }; }
+  function copyStmts(list) { return list.map(t => ({ ...t })); }
   let savedTimer;
   function save() {
     try { localStorage.setItem(STORE, JSON.stringify(db)); } catch (e) { /* ignore */ }
@@ -92,8 +102,25 @@
     const prev = s.levels[lvl];
     s.levels[lvl] = canInherit(s.id, lvl)
       ? { mode: 'inherit', statements: prev?.statements || [] }
-      : { mode: 'own', statements: prev?.statements?.length ? prev.statements : [''] };
+      : { mode: 'own', statements: prev?.statements?.length ? prev.statements : [blankStmt()] };
   }
+
+  /** Other places in this area whose own statements use `code` (case-insensitive). */
+  function codeClashes(code, selfId, selfLevel, selfIndex) {
+    const c = code.trim().toLowerCase();
+    if (!c) return [];
+    const out = [];
+    Object.values(idx).forEach(n => LEVELS.forEach(l => {
+      const L = n.s.levels[l.key];
+      if (L?.mode !== 'own') return;
+      L.statements.forEach((t, i) => {
+        if (n.s.id === selfId && l.key === selfLevel && i === selfIndex) return;
+        if (t.code.trim().toLowerCase() === c) out.push(`${n.s.name} (${l.name})`);
+      });
+    }));
+    return out;
+  }
+  const clashText = list => list.length ? `⚠ This ID is also used in ${list.join(', ')}` : '';
 
   /* ---------- rendering ---------- */
   function render() {
@@ -232,8 +259,8 @@
   }
 
   function stmtList(list, cls = '') {
-    if (!list.length || list.every(t => !t.trim())) return `<p class="muted-note">No statements yet — click to write one.</p>`;
-    return `<ol class="stmts ${cls}">${list.map(t => `<li>${t.trim() ? esc(t) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+    if (!list.length || list.every(t => !t.text.trim() && !t.code.trim())) return `<p class="muted-note">No statements yet — click to write one.</p>`;
+    return `<ol class="stmts ${cls}">${list.map(t => `<li>${t.code.trim() ? `<span class="sid">${esc(t.code)}</span> ` : ''}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
   }
 
   function cellHTML(n, l) {
@@ -361,7 +388,14 @@
         ${cur.statements.map((t, i) => `
           <div class="stmt-row">
             <span class="stmt-num">${i + 1}</span>
-            <textarea class="autosize" rows="2" data-stmt="${i}" aria-label="Understanding statement ${i + 1}" placeholder="Learners understand that…">${esc(t)}</textarea>
+            <div class="stmt-fields">
+              <label class="sid-field">
+                <span>Understanding ID</span>
+                <input data-stmt="${i}" data-part="code" value="${esc(t.code)}" placeholder="e.g. SCN 1-01" aria-label="Understanding ID for statement ${i + 1}" autocomplete="off" spellcheck="false">
+              </label>
+              <textarea class="autosize" rows="2" data-stmt="${i}" data-part="text" aria-label="Understanding statement ${i + 1}" placeholder="Learners understand that…">${esc(t.text)}</textarea>
+              <p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(t.code, id, level, i)))}</p>
+            </div>
             <button class="icon-btn" data-action="del-stmt" data-i="${i}" title="Remove statement" aria-label="Remove statement ${i + 1}">×</button>
           </div>`).join('')}
         <button class="btn subtle" data-action="add-stmt">+ Add understanding statement</button>
@@ -416,7 +450,7 @@
           ${LEVELS.map(l => {
             const r = resolve(s.id, l.key);
             if (r.status === 'na') return '';
-            const cnt = r.status === 'orphan' ? '⚠ nothing to inherit' : r.status === 'inherit' ? `inherits ${plural(r.statements.length, 'statement')} from ${esc(r.source.name)}` : plural(r.statements.filter(t => t.trim()).length, 'statement');
+            const cnt = r.status === 'orphan' ? '⚠ nothing to inherit' : r.status === 'inherit' ? `inherits ${plural(r.statements.length, 'statement')} from ${esc(r.source.name)}` : plural(r.statements.filter(t => t.text.trim()).length, 'statement');
             return `<button class="lvl-row ${r.status}" style="--lc:var(--${l.key})" data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
               <span class="lvl-pill">${l.name}</span><span>${cnt}</span><span class="go">Edit →</span></button>`;
           }).join('') || '<p class="muted-note">Not taught at any level yet.</p>'}
@@ -460,28 +494,29 @@
       else {
         const prev = s.levels[l] || { statements: [] };
         s.levels[l] = { mode: m, statements: prev.statements };
-        if (m === 'own' && !prev.statements.length) s.levels[l].statements = [''];
+        if (m === 'own' && !prev.statements.length) s.levels[l].statements = [blankStmt()];
       }
       commit();
     },
     override() {
       const r = resolve(ui.drawer.id, ui.drawer.level);
-      idx[ui.drawer.id].s.levels[ui.drawer.level] = { mode: 'own', statements: r.statements ? [...r.statements] : [''] };
+      idx[ui.drawer.id].s.levels[ui.drawer.level] = { mode: 'own', statements: r.statements ? copyStmts(r.statements) : [blankStmt()] };
       commit();
-      $('#drawer [data-stmt="0"]')?.focus();
+      $('#drawer [data-stmt="0"][data-part="text"]')?.focus();
     },
     'copy-parent'() {
       const n = idx[ui.drawer.id];
       const r = resolve(n.parent.id, ui.drawer.level);
       const L = n.s.levels[ui.drawer.level];
-      L.statements = [...L.statements.filter(t => t.trim()), ...r.statements];
+      L.statements = [...L.statements.filter(t => t.text.trim() || t.code.trim()), ...copyStmts(r.statements)];
       commit();
     },
     'add-stmt'() {
       const L = idx[ui.drawer.id].s.levels[ui.drawer.level];
-      L.statements.push('');
+      L.statements.push(blankStmt());
       commit();
-      const all = $$('#drawer [data-stmt]'); all[all.length - 1]?.focus();
+      // Start at the ID box so every new statement gets the chance of an ID.
+      const all = $$('#drawer [data-part="code"]'); all[all.length - 1]?.focus();
     },
     'del-stmt'(t) {
       const L = idx[ui.drawer.id].s.levels[ui.drawer.level];
@@ -573,7 +608,13 @@
     } else if (t.dataset.sfield) {
       idx[ui.drawer.id].s[t.dataset.sfield] = t.value; save(); renderBody();
     } else if (t.dataset.stmt != null) {
-      idx[ui.drawer.id].s.levels[ui.drawer.level].statements[+t.dataset.stmt] = t.value; save(); renderBody();
+      const i = +t.dataset.stmt, part = t.dataset.part;
+      idx[ui.drawer.id].s.levels[ui.drawer.level].statements[i][part] = t.value;
+      save(); renderBody();
+      if (part === 'code') {
+        const w = $(`#dup-${i}`);
+        if (w) w.textContent = clashText(codeClashes(t.value, ui.drawer.id, ui.drawer.level, i));
+      }
     }
   });
 

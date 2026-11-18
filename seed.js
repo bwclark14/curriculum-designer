@@ -164,5 +164,26 @@
     ]
   };
 
+  // Give every written statement a demo understanding ID, e.g. "SCN 2-03"
+  // (area prefix, level number 0–4, running number within that level).
+  function assignIds(area, prefix) {
+    const nums = ['early', 'first', 'second', 'third', 'fourth'];
+    const count = {};
+    const walk = list => list.forEach(s => {
+      nums.forEach((lvl, d) => {
+        const L = s.levels[lvl];
+        if (L?.mode !== 'own') return;
+        L.statements = L.statements.map(text => {
+          count[lvl] = (count[lvl] || 0) + 1;
+          return { code: `${prefix} ${d}-${String(count[lvl]).padStart(2, '0')}`, text };
+        });
+      });
+      walk(s.children);
+    });
+    walk(area.strands);
+  }
+  assignIds(sciences, 'SCN');
+  assignIds(arts, 'EXA');
+
   window.SEED = { currentId: sciences.id, areas: [sciences, arts] };
 })();
