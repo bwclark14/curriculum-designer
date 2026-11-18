@@ -435,3 +435,29 @@ body.drawer-open main { padding-right: calc(var(--drawer-w) + 24px); }
   .mode { grid-template-columns: 1fr; }
   :root { --drawer-w: 100vw; }
 }
+
+/* ---------- name-only strands (no statement, no ID) ---------- */
+.sw.group { background: repeating-linear-gradient(0deg, transparent 0 4px, var(--line-strong) 4px 5px); border: 1.5px solid var(--line-strong); }
+.cell.group {
+  background: #f7f5f0; border: 1.5px solid var(--line-strong); color: var(--muted);
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+}
+.group-tag {
+  align-self: flex-start; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0 8px;
+}
+.group-note { margin: 0; font-size: 12px; }
+.jn.group > .jn-card { background: #f7f5f0; border: 1.5px solid var(--line-strong); }
+.lchip.group i { background: #fff; border: 1.5px solid var(--ink); }
+.lvl-row.group { background: #f7f5f0; color: var(--muted); }
+.group-explain { background: #f7f5f0; border: 1.5px solid var(--line-strong); }
+.group-kids-h { font-weight: 600; margin-top: 10px !important; }
+.group-kids { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 4px; }
+.group-kids li { display: flex; justify-content: space-between; gap: 8px; background: #fff; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.group-kids button { border: 0; background: none; padding: 0; font-weight: 600; text-decoration: underline; text-align: left; }
+.group-kids span { color: var(--muted); font-size: 12px; }
+.mode { grid-template-columns: repeat(2, 1fr); }
+
+/* an ID is required once a lowest-level statement has text */
+.sid.missing { color: var(--warn); background: var(--warn-bg); border: 1px dashed var(--warn); font-family: var(--font-body); }
+.sid-field input.need { border-color: var(--warn); background: var(--warn-bg); }

@@ -1,13 +1,14 @@
-/* Demo data. A level spec is either an array/string of statements (own)
-   or '^' meaning "inherit the parent strand's statements at this level". */
+/* Demo data. A level spec is either an array/string of statements (own),
+   '^' meaning "inherit the statements written above at this level", or
+   '-' meaning "name only": the strand is there to group sub-strands, with no statement. */
 (function () {
   let n = 0;
   const id = () => 'seed' + (++n);
   function S(name, spec, children = [], description = '') {
     const levels = {};
     for (const [k, v] of Object.entries(spec)) {
-      levels[k] = v === '^'
-        ? { mode: 'inherit', statements: [] }
+      levels[k] = v === '^' ? { mode: 'inherit', statements: [] }
+        : v === '-' ? { mode: 'group', statements: [] }
         : { mode: 'own', statements: [].concat(v) };
     }
     return { id: id(), name, description, levels, children };
@@ -127,6 +128,14 @@
         })
       ]),
 
+      S('The connected world', { first: '-' }, [
+        S('Nature and the Earth’s resources', { first: '-' }, [
+          S('Nature', { first: 'Living things and their habitats are part of a natural world that we depend on.' }),
+          S('Food', { first: 'Our food comes from plants and animals, and is grown, caught or farmed.' }),
+          S('Materials', { first: 'Many everyday materials come from the Earth and from living things.' })
+        ])
+      ], 'A name-only strand: it groups sub-strands and has no statement of its own.'),
+
       S('Topical science', {
         second: 'Science appears in the news and in everyday decisions.',
         third: 'Scientific claims should be evaluated against evidence.',
@@ -181,10 +190,12 @@
         fourth: 'Complex systems are designed by managing how their sub-systems interact.'
       }, [
         S('Engineering', {
+          first: '^',
           second: 'Mechanisms such as levers and gears change the size and direction of a force.',
           third: '^'
         }),
         S('Computing', {
+          first: '^',
           second: '^',
           third: 'Algorithms can control a system and respond to its sensors.'
         })
@@ -219,10 +230,11 @@
           L.statements = L.statements.map(text => ({ code: '', text }));
           shown[lvl] = L.statements;
         } else {
+          // inherit, or name only (which passes the statements above it through to its sub-strands)
           shown[lvl] = parentShown[lvl] || [];
         }
         const lowest = !s.children.some(c => c.levels[lvl]);
-        if (!lowest) return;
+        if (!lowest || L.mode === 'group') return;
         if (L.mode === 'own') L.statements.forEach(t => { t.code = next(lvl, d); });
         else L.codes = shown[lvl].map(() => next(lvl, d));
       });

@@ -5,13 +5,16 @@ A demo site for defining a curriculum area visually.
 - A **curriculum area** has a name, a purpose statement and one or more big ideas, each with a name and a description.
 - An area has **strands**; strands can have **sub-strands**, nested as deep as needed.
 - Each strand applies at one or more **levels**: Early, First, Second, Third, Fourth.
-- At each level a strand applies at, it has one or more **understanding statements**,  either written for that strand or **inherited** from its parent strand.
+- At each level a strand applies at, it is either **name only** (no statement and no ID; it just groups its sub-strands), has its own **understanding statements**, or **inherits** the statements written above it.
 
 ## Understanding IDs
 
-Understanding IDs (e.g. `TCH 2-01`) are entered at the **lowest level of understanding**. At a given level, a strand holds the IDs only if none of its sub-strands are taught at that level. Otherwise each sub-strand taught there gets its own IDs, even when it inherits its statements from the parent.
+An understanding ID (e.g. `TCH 1-01`) is only needed once an understanding statement is written, and it is entered at the **lowest level of understanding**. At a given level, a strand holds the IDs only if none of its sub-strands are taught at that level. Otherwise each sub-strand taught there gets its own IDs, even when it inherits its statements. A lowest-level statement with no ID is flagged "ID needed".
 
-For example, in Technologies the *Systems* strand holds the ID at Early level. At Second level, *Systems* has the sub-strands *Engineering* and *Computing*, so each of those has its own understanding ID, and *Systems* shows "IDs on 2 sub-strands".
+Examples in the demo:
+
+- **Technologies:** *Systems* has a statement and ID at Early. At First it breaks into *Engineering* and *Computing*, which inherit the Systems statement but each have their own ID.
+- **Sciences:** at First, *The connected world* is name only, as is its sub-strand *Nature and the Earth's resources*. That sub-strand's sub-strands, *Nature*, *Food* and *Materials*, each have their own statement and ID.
 
 ## Views
 

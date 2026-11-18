@@ -79,34 +79,53 @@
   }
 
   /** What does strand `id` say at level `lvl`?
-   *  status: 'na' | 'own' | 'inherit' | 'orphan'  (+ statements, source) */
+   *  status: 'na'      not taught at this level
+   *          'group'   named only: no statement, it just groups its sub-strands
+   *          'own'     its own understanding statements
+   *          'inherit' the nearest statements written above it
+   *          'orphan'  set to inherit, but nothing is written above it */
   function resolve(id, lvl) {
     const n = idx[id];
     const L = n && n.s.levels[lvl];
     if (!L) return { status: 'na' };
     if (L.mode === 'own') return { status: 'own', statements: L.statements, source: n.s };
+    if (L.mode === 'group') return { status: 'group', statements: [] };
     if (!n.parent) return { status: 'orphan', reason: 'Top-level strands have no parent to inherit from.' };
-    const up = resolve(n.parent.id, lvl);
-    if (up.status === 'own' || up.status === 'inherit') {
-      return { status: 'inherit', statements: up.statements, source: up.source, via: n.parent };
-    }
-    return { status: 'orphan', reason: `“${n.parent.name}” is not taught at ${LV[lvl].name} level, so there is nothing to inherit.` };
+    const up = inheritable(n.parent.id, lvl);
+    if (up) return { status: 'inherit', statements: up.statements, source: up.source };
+    return {
+      status: 'orphan',
+      reason: !n.parent.levels[lvl]
+        ? `“${n.parent.name}” is not taught at ${LV[lvl].name} level, so there is nothing to inherit.`
+        : `No understanding statement is written above “${n.s.name}” at ${LV[lvl].name} level, so there is nothing to inherit.`
+    };
   }
+
+  /** What a sub-strand of `id` would inherit at `lvl`: the nearest written statements at or above it.
+   *  Name-only strands pass their parent's statements through. */
+  function inheritable(id, lvl) {
+    const r = resolve(id, lvl);
+    if (r.status === 'own' || r.status === 'inherit') return r;
+    if (r.status === 'group') { const p = idx[id].parent; return p ? inheritable(p.id, lvl) : null; }
+    return null;
+  }
+
   const inheritorsOf = (id, lvl) =>
     Object.values(idx).filter(n => n.s.id !== id && n.s.levels[lvl]?.mode === 'inherit' && resolve(n.s.id, lvl).source?.id === id);
 
   function canInherit(id, lvl) {
     const p = idx[id].parent;
-    if (!p) return false;
-    const r = resolve(p.id, lvl);
-    return r.status === 'own' || r.status === 'inherit';
+    return !!(p && inheritable(p.id, lvl));
   }
 
+  /** Switch a level on: inherit when something is written above, otherwise name only. */
   function applyLevel(s, lvl) {
     const prev = s.levels[lvl];
-    s.levels[lvl] = canInherit(s.id, lvl)
-      ? { mode: 'inherit', statements: prev?.statements || [], codes: prev?.codes || [] }
-      : { mode: 'own', statements: prev?.statements?.length ? prev.statements : [blankStmt()], codes: prev?.codes || [] };
+    s.levels[lvl] = {
+      mode: canInherit(s.id, lvl) ? 'inherit' : 'group',
+      statements: prev?.statements || [],
+      codes: prev?.codes || []
+    };
   }
 
   /* Understanding IDs live at the lowest level of understanding: a strand holds the
@@ -141,6 +160,24 @@
     return out;
   }
   const clashText = list => list.length ? `⚠ This ID is also used in ${list.join(', ')}` : '';
+
+  /** An ID is only needed once there is statement text; then it must be present and unique. */
+  function idProblem(code, text, id, lvl, i) {
+    if (!text.trim()) return '';
+    if (!code.trim()) return '⚠ This statement needs an understanding ID';
+    return clashText(codeClashes(code, id, lvl, i));
+  }
+
+  /** Lowest-level statements in this area that have text but no ID. */
+  function missingIdCount() {
+    let c = 0;
+    Object.values(idx).forEach(n => LEVELS.forEach(l => {
+      const r = resolve(n.s.id, l.key);
+      const codes = cellCodes(n.s.id, l.key, r);
+      if (codes) r.statements.forEach((t, i) => { if (t.text.trim() && !(codes[i] || '').trim()) c++; });
+    }));
+    return c;
+  }
 
   /* ---------- rendering ---------- */
   function render() {
@@ -196,12 +233,13 @@
         const r = resolve(n.s.id, l.key);
         if (r.status === 'na') return;
         c++;
-        if (r.status === 'own') own += r.statements.length;
+        if (r.status === 'own') own += r.statements.filter(t => t.text.trim()).length;
         else if (r.status === 'inherit') inh++;
-        else orphan++;
+        else if (r.status === 'orphan') orphan++;
       });
       return { l, c };
     });
+    const missing = missingIdCount();
     const max = Math.max(1, nodes.length);
     const top = area().strands.length;
     $('#stats').innerHTML = `
@@ -211,6 +249,7 @@
         <div class="stat"><b>${own}</b><span>statements written</span></div>
         <div class="stat"><b>${inh}</b><span>cells inheriting</span></div>
         ${orphan ? `<div class="stat warn"><b>${orphan}</b><span>need attention</span></div>` : ''}
+        ${missing ? `<div class="stat warn"><b>${missing}</b><span>${missing === 1 ? 'statement needs' : 'statements need'} an ID</span></div>` : ''}
       </div>
       <div class="coverage" aria-label="Strands taught at each level">
         ${per.map(({ l, c }) => `
@@ -282,7 +321,15 @@
   function stmtList(list, cls = '', codes = null) {
     const code = i => (codes && codes[i] || '').trim();
     if (!list.length || list.every((t, i) => !t.text.trim() && !code(i))) return `<p class="muted-note">No statements yet — click to write one.</p>`;
-    return `<ol class="stmts ${cls}">${list.map((t, i) => `<li>${code(i) ? `<span class="sid">${esc(code(i))}</span> ` : ''}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+    const tag = (t, i) => code(i) ? `<span class="sid">${esc(code(i))}</span> `
+      : codes && t.text.trim() ? `<span class="sid missing" title="Statements at the lowest level need an understanding ID">ID needed</span> ` : '';
+    return `<ol class="stmts ${cls}">${list.map((t, i) => `<li>${tag(t, i)}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+  }
+  /** Body of a name-only cell: no statement, just a heading for its sub-strands. */
+  function groupBody(id, lvl) {
+    const k = taughtKids(id, lvl).length;
+    return `<span class="group-tag">Name only</span>
+      <p class="group-note">${k ? `Groups ${plural(k, 'sub-strand')} ↓` : 'No understanding statement at this level'}</p>`;
   }
   /** Shown on a cell whose IDs are entered further down, on its sub-strands. */
   function idNote(id, lvl) {
@@ -299,6 +346,9 @@
     const base = `style="--lc:var(--${l.key})" data-cell="${key}" role="button" tabindex="0"`;
     if (r.status === 'na') {
       return `<div class="cell na" ${base} data-action="apply" data-id="${s.id}" data-level="${l.key}" aria-label="Teach ${esc(s.name)} at ${l.name} level"><span>+ Teach at ${l.name}</span></div>`;
+    }
+    if (r.status === 'group') {
+      return `<div class="cell group ${sel}" ${base} data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">${groupBody(s.id, l.key)}</div>`;
     }
     if (r.status === 'orphan') {
       return `<div class="cell orphan ${sel}" ${base} data-action="edit-cell" data-id="${s.id}" data-level="${l.key}"><span class="ribbon">⚠ Nothing to inherit</span><p>${esc(r.reason)}</p></div>`;
@@ -329,6 +379,7 @@
       let body = '';
       if (r.status === 'own') body = stmtList(r.statements, '', cellCodes(s.id, L.key, r)) + idNote(s.id, L.key);
       else if (r.status === 'inherit') body = `<span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, L.key, r))}${idNote(s.id, L.key)}`;
+      else if (r.status === 'group') body = groupBody(s.id, L.key);
       else if (r.status === 'orphan') body = `<span class="ribbon warn">⚠ Nothing to inherit</span>`;
       else body = `<p class="muted-note">Not taught at ${L.name} level.</p>`;
       const action = r.status === 'na' ? 'apply' : 'edit-cell';
@@ -386,7 +437,7 @@
       <ul>${kids.map(k => `<li><button data-action="edit-cell" data-id="${k.id}" data-level="${level}">${esc(k.name) || 'Untitled'}</button></li>`).join('')}</ul>
     </div>`;
   }
-  const statusText = st => ({ own: 'own statements', inherit: 'inherits from parent', na: 'not taught', orphan: 'needs attention' }[st]);
+  const statusText = st => ({ own: 'own statements', group: 'name only', inherit: 'inherits from parent', na: 'not taught', orphan: 'needs attention' }[st]);
 
   function cellDrawer() {
     const { id, level } = ui.drawer;
@@ -394,16 +445,30 @@
     const cur = s.levels[level];
     const mode = cur ? cur.mode : 'na';
     const r = resolve(id, level);
-    const inheritable = canInherit(id, level);
+    const canInh = canInherit(id, level);
+    const above = n.parent && inheritable(n.parent.id, level);
     const parentNote = !n.parent
       ? 'Top-level strands have no parent to inherit from.'
-      : inheritable ? `Use the statements from “${esc(n.parent.name)}”.`
-        : `“${esc(n.parent.name)}” isn’t taught at ${L.name} level.`;
+      : above ? `Use the statements from “${esc(above.source.name)}”.`
+        : !n.parent.levels[level] ? `“${esc(n.parent.name)}” isn’t taught at ${L.name} level.`
+          : 'Nothing is written above it at this level.';
 
     let body = '';
     if (mode === 'na') {
       body = `<div class="explain na-explain"><p><b>${esc(s.name)}</b> is not taught at <b>${L.name}</b> level.</p>
-        <p>Choose <em>Inherit</em> or <em>Write own</em> above to include it.</p></div>`;
+        <p>Choose <em>Name only</em>, <em>Inherit</em> or <em>Write own</em> above to include it.</p></div>`;
+    } else if (mode === 'group') {
+      const kids = taughtKids(id, level);
+      body = `<div class="explain group-explain">
+        <p><b>${esc(s.name)}</b> is named at ${L.name} level but has no understanding statement, so it needs no understanding ID.</p>
+        <p>Use it to group sub-strands. Sub-strands with statements carry their own IDs${above ? `, and sub-strands that inherit pick up the statements from “${esc(above.source.name)}”` : ''}.</p>
+        ${kids.length ? `<p class="group-kids-h">Sub-strands at ${L.name} level:</p>
+          <ul class="group-kids">${kids.map(k => {
+            const kr = resolve(k.id, level);
+            return `<li><button data-action="edit-cell" data-id="${k.id}" data-level="${level}">${esc(k.name) || 'Untitled'}</button><span>${statusText(kr.status)}</span></li>`;
+          }).join('')}</ul>` : ''}
+        <button class="btn subtle" data-action="add-child" data-id="${id}">+ Add sub-strand</button>
+      </div>`;
     } else if (mode === 'inherit') {
       if (r.status === 'inherit') {
         const chain = [];
@@ -419,10 +484,10 @@
                 <div class="stmt-fields">
                   <label class="sid-field">
                     <span>Understanding ID</span>
-                    <input data-icode="${i}" value="${esc(cur.codes[i] || '')}" placeholder="e.g. TCH 2-01" aria-label="Understanding ID for inherited statement ${i + 1}" autocomplete="off" spellcheck="false">
+                    <input data-icode="${i}" class="${!(cur.codes[i] || '').trim() && t.text.trim() ? 'need' : ''}" value="${esc(cur.codes[i] || '')}" placeholder="e.g. TCH 2-01" aria-label="Understanding ID for inherited statement ${i + 1}" autocomplete="off" spellcheck="false">
                   </label>
                   <p class="inh-text">${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</p>
-                  <p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(cur.codes[i] || '', id, level, i)))}</p>
+                  <p class="dup-warn" id="dup-${i}" role="status">${esc(idProblem(cur.codes[i] || '', t.text, id, level, i))}</p>
                 </div>
               </div>`).join('')}
             </div>` : stmtList(r.statements, 'faded big') + idBox(id, level)}
@@ -444,15 +509,15 @@
             <div class="stmt-fields">
               ${leaf ? `<label class="sid-field">
                 <span>Understanding ID</span>
-                <input data-stmt="${i}" data-part="code" value="${esc(t.code)}" placeholder="e.g. SCN 1-01" aria-label="Understanding ID for statement ${i + 1}" autocomplete="off" spellcheck="false">
+                <input data-stmt="${i}" data-part="code" class="${!t.code.trim() && t.text.trim() ? 'need' : ''}" value="${esc(t.code)}" placeholder="e.g. SCN 1-01" aria-label="Understanding ID for statement ${i + 1}" autocomplete="off" spellcheck="false">
               </label>` : ''}
               <textarea class="autosize" rows="2" data-stmt="${i}" data-part="text" aria-label="Understanding statement ${i + 1}" placeholder="Learners understand that…">${esc(t.text)}</textarea>
-              ${leaf ? `<p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(t.code, id, level, i)))}</p>` : ''}
+              ${leaf ? `<p class="dup-warn" id="dup-${i}" role="status">${esc(idProblem(t.code, t.text, id, level, i))}</p>` : ''}
             </div>
             <button class="icon-btn" data-action="del-stmt" data-i="${i}" title="Remove statement" aria-label="Remove statement ${i + 1}">×</button>
           </div>`).join('')}
         <button class="btn subtle" data-action="add-stmt">+ Add understanding statement</button>
-        ${inheritable ? `<button class="btn subtle" data-action="copy-parent">Copy parent’s statements in</button>` : ''}
+        ${canInh ? `<button class="btn subtle" data-action="copy-parent">Copy parent’s statements in</button>` : ''}
         ${heirs.length ? `<div class="heirs-box"><b>↓ Shared with ${plural(heirs.length, 'sub-strand')}</b> — these statements also appear in:
           <ul>${heirs.map(h => `<li><button data-action="edit-cell" data-id="${h.s.id}" data-level="${level}">${esc(h.s.name)}</button></li>`).join('')}</ul></div>` : ''}
       </div>`;
@@ -470,6 +535,8 @@
         <div class="mode" role="radiogroup" aria-label="How is this level defined?">
           <button class="mode-opt ${mode === 'na' ? 'on' : ''}" data-action="set-mode" data-mode="na" role="radio" aria-checked="${mode === 'na'}">
             <i class="sw na"></i><b>Not taught</b><small>Skip this level</small></button>
+          <button class="mode-opt ${mode === 'group' ? 'on' : ''}" data-action="set-mode" data-mode="group" role="radio" aria-checked="${mode === 'group'}">
+            <i class="sw group"></i><b>Name only</b><small>No statement or ID; groups sub-strands</small></button>
           <button class="mode-opt ${mode === 'inherit' ? 'on' : ''}" data-action="set-mode" data-mode="inherit" role="radio" aria-checked="${mode === 'inherit'}" ${!n.parent ? 'disabled' : ''}>
             <i class="sw inh"></i><b>Inherit</b><small>${parentNote}</small></button>
           <button class="mode-opt ${mode === 'own' ? 'on' : ''}" data-action="set-mode" data-mode="own" role="radio" aria-checked="${mode === 'own'}">
@@ -503,7 +570,7 @@
           ${LEVELS.map(l => {
             const r = resolve(s.id, l.key);
             if (r.status === 'na') return '';
-            const cnt = r.status === 'orphan' ? '⚠ nothing to inherit' : r.status === 'inherit' ? `inherits ${plural(r.statements.length, 'statement')} from ${esc(r.source.name)}` : plural(r.statements.filter(t => t.text.trim()).length, 'statement');
+            const cnt = r.status === 'orphan' ? '⚠ nothing to inherit' : r.status === 'group' ? 'name only — no statement' : r.status === 'inherit' ? `inherits ${plural(r.statements.length, 'statement')} from ${esc(r.source.name)}` : plural(r.statements.filter(t => t.text.trim()).length, 'statement');
             return `<button class="lvl-row ${r.status}" style="--lc:var(--${l.key})" data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
               <span class="lvl-pill">${l.name}</span><span>${cnt}</span><span class="go">Edit →</span></button>`;
           }).join('') || '<p class="muted-note">Not taught at any level yet.</p>'}
@@ -564,7 +631,7 @@
     },
     'copy-parent'() {
       const n = idx[ui.drawer.id];
-      const r = resolve(n.parent.id, ui.drawer.level);
+      const r = inheritable(n.parent.id, ui.drawer.level);
       const L = n.s.levels[ui.drawer.level];
       L.statements = [...L.statements.filter(t => t.text.trim() || t.code.trim()), ...r.statements.map(t => ({ code: '', text: t.text }))];
       commit();
@@ -600,7 +667,8 @@
       p.children.push(s);
       ui.collapsed.delete(p.id);
       reindex();
-      LEVELS.forEach(l => { if (canInherit(s.id, l.key)) s.levels[l.key] = { mode: 'inherit', statements: [], codes: [] }; });
+      // Present wherever the parent is: inherit when something is written above, otherwise name only.
+      LEVELS.forEach(l => { if (p.levels[l.key]) applyLevel(s, l.key); });
       save(); openDrawer({ type: 'strand', id: s.id });
       selectName();
     },
@@ -675,16 +743,15 @@
       L.codes ||= [];
       L.codes[i] = t.value;
       save(); renderBody();
-      const w = $(`#dup-${i}`);
-      if (w) w.textContent = clashText(codeClashes(t.value, ui.drawer.id, ui.drawer.level, i));
+      const text = resolve(ui.drawer.id, ui.drawer.level).statements?.[i]?.text || '';
+      showIdProblem(i, idProblem(t.value, text, ui.drawer.id, ui.drawer.level, i));
     } else if (t.dataset.stmt != null) {
       const i = +t.dataset.stmt, part = t.dataset.part;
-      idx[ui.drawer.id].s.levels[ui.drawer.level].statements[i][part] = t.value;
+      const st = idx[ui.drawer.id].s.levels[ui.drawer.level].statements[i];
+      st[part] = t.value;
       save(); renderBody();
-      if (part === 'code') {
-        const w = $(`#dup-${i}`);
-        if (w) w.textContent = clashText(codeClashes(t.value, ui.drawer.id, ui.drawer.level, i));
-      }
+      // An ID becomes required as soon as the statement has text, so re-check on either field.
+      showIdProblem(i, idProblem(st.code, st.text, ui.drawer.id, ui.drawer.level, i));
     }
   });
 
@@ -708,6 +775,13 @@
     $$('.src-hl').forEach(x => x.classList.remove('src-hl'));
     if (c) $(`[data-cell="${c.dataset.src}"]`)?.classList.add('src-hl');
   });
+
+  function showIdProblem(i, msg) {
+    const w = $(`#dup-${i}`);
+    if (w) w.textContent = msg;
+    const inp = $(`#drawer [data-icode="${i}"], #drawer [data-stmt="${i}"][data-part="code"]`);
+    if (inp) inp.classList.toggle('need', msg.includes('needs'));
+  }
 
   function autosize(t) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; }
   function autosizeAll(root) { requestAnimationFrame(() => $$('textarea.autosize', root).forEach(autosize)); }
