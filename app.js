@@ -21,7 +21,23 @@
 
   /* ---------- state ---------- */
   let db = load();
-  const ui = { view: 'matrix', focus: 'second', collapsed: new Set(), drawer: null };
+  const ui = {
+    page: location.hash.startsWith('#knows-and-dos') ? 'kd' : 'structure',
+    view: 'matrix', focus: 'second', collapsed: new Set(), drawer: null,
+    // Knows & Dos page: selected understanding, list filters, edit/preview, open editor
+    kd: { sel: selFromHash(), level: 'all', q: '', preview: false },
+    ed: null
+  };
+
+  // The open understanding is kept in the URL (#knows-and-dos/<strand>/<level>/<n>) so a reload or link returns to it.
+  function selFromHash() {
+    const m = location.hash.match(/^#knows-and-dos\/([^/]+)\/([a-z]+)\/(\d+)$/);
+    return m ? { id: decodeURIComponent(m[1]), level: m[2], i: +m[3] } : null;
+  }
+  function kdHash() {
+    const s = ui.kd.sel;
+    return s ? `#knows-and-dos/${encodeURIComponent(s.id)}/${s.level}/${s.i}` : '#knows-and-dos';
+  }
 
   function load() {
     try {
@@ -41,6 +57,8 @@
         L.statements = (L.statements || []).map(toStmt);
         // IDs for inherited statements, entered on the inheriting (lowest-level) strand.
         L.codes = Array.isArray(L.codes) ? L.codes.map(c => c || '') : [];
+        // Knows & dos for inherited statements, lined up with L.codes.
+        L.kd = Array.isArray(L.kd) ? L.kd.map(normKD) : [];
       });
       fixStrands(s.children);
     });
@@ -53,12 +71,45 @@
     return d;
   }
   // Function declarations (not consts) so they are available when load() runs at start-up.
-  function toStmt(t) { return typeof t === 'string' ? { code: '', text: t } : { code: t.code || '', text: t.text || '' }; }
+  function toStmt(t) {
+    if (typeof t === 'string') return { code: '', text: t };
+    const s = { code: t.code || '', text: t.text || '' };
+    if (t.kd) s.kd = normKD(t.kd);
+    return s;
+  }
+  /* Knows & dos for one understanding:
+     { sequenced, collections: [{ id, name, sequenced, knows: [item], dos: [item] }] }
+     item: { id, text (may contain $LaTeX$), images: [{ id, src (data URL), alt }] } */
+  function newKD() { return { sequenced: false, collections: [] }; }
+  function newCollection() { return { id: uid(), name: '', sequenced: false, knows: [], dos: [] }; }
+  function normKD(k) {
+    if (!k) return null;
+    return {
+      sequenced: !!k.sequenced,
+      collections: (k.collections || []).map(c => ({
+        id: c.id || uid(), name: c.name || '', sequenced: !!c.sequenced,
+        knows: (c.knows || []).map(normItem), dos: (c.dos || []).map(normItem)
+      }))
+    };
+  }
+  function normItem(it) {
+    return { id: it.id || uid(), text: it.text || '', images: (it.images || []).filter(im => im && im.src).map(im => ({ id: im.id || uid(), src: im.src, alt: im.alt || '' })) };
+  }
   function blankStmt() { return { code: '', text: '' }; }
   function copyStmts(list) { return list.map(t => ({ ...t })); }
   let savedTimer;
+  let warnedFull = false;
   function save() {
-    try { localStorage.setItem(STORE, JSON.stringify(db)); } catch (e) { /* ignore */ }
+    try {
+      localStorage.setItem(STORE, JSON.stringify(db));
+      warnedFull = false;
+    } catch (e) {
+      // Usually the browser's storage limit, most often reached by large images.
+      if (!warnedFull && /quota/i.test(e.name + e.message)) {
+        warnedFull = true;
+        alert('Your browser’s storage for this site is full, so the latest changes could not be saved. Remove some images, or use Export to keep a copy of your work.');
+      }
+    }
     const el = $('#saved');
     el.classList.add('show');
     clearTimeout(savedTimer);
@@ -183,9 +234,21 @@
   function render() {
     reindex();
     renderTop();
+    renderPage();
+    if (ui.page === 'kd') { renderDrawer(); renderKD(); return; }
     renderHero();
     renderBody();
     renderDrawer();
+  }
+
+  /** Switch between the Structure page and the Knows & Dos page. */
+  function renderPage() {
+    const kd = ui.page === 'kd';
+    $('#structure-page').hidden = kd;
+    $('#kd-page').hidden = !kd;
+    $$('.pages [data-page]').forEach(b => b.setAttribute('aria-current', b.dataset.page === ui.page ? 'page' : 'false'));
+    if (kd) ui.drawer = null;
+    if (!kd && location.hash) history.replaceState(null, '', location.pathname + location.search);
   }
 
   function renderTop() {
@@ -318,12 +381,17 @@
   }
 
   /** `codes` lines up with `list`; pass null where IDs belong to sub-strands. */
-  function stmtList(list, cls = '', codes = null) {
+  function stmtList(list, cls = '', codes = null, ref = null) {
     const code = i => (codes && codes[i] || '').trim();
+    const counts = i => {
+      if (!ref || !code(i)) return '';
+      const { K, D } = kdCount({ ...ref, i });
+      return K || D ? ` <span class="kd-count" title="${K} know, ${D} do statements">K ${K} · D ${D}</span>` : '';
+    };
     if (!list.length || list.every((t, i) => !t.text.trim() && !code(i))) return `<p class="muted-note">No statements yet — click to write one.</p>`;
     const tag = (t, i) => code(i) ? `<span class="sid">${esc(code(i))}</span> `
       : codes && t.text.trim() ? `<span class="sid missing" title="Statements at the lowest level need an understanding ID">ID needed</span> ` : '';
-    return `<ol class="stmts ${cls}">${list.map((t, i) => `<li>${tag(t, i)}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+    return `<ol class="stmts ${cls}">${list.map((t, i) => `<li>${tag(t, i)}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}${counts(i)}</li>`).join('')}</ol>`;
   }
   /** Body of a name-only cell: no statement, just a heading for its sub-strands. */
   function groupBody(id, lvl) {
@@ -355,11 +423,11 @@
     }
     if (r.status === 'inherit') {
       return `<div class="cell inh ${sel}" ${base} data-src="${r.source.id}:${l.key}" data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
-        <span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, l.key, r))}${idNote(s.id, l.key)}</div>`;
+        <span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, l.key, r), { id: s.id, level: l.key })}${idNote(s.id, l.key)}</div>`;
     }
     const heirs = inheritorsOf(s.id, l.key).length;
     return `<div class="cell own ${sel}" ${base} data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
-      ${stmtList(r.statements, '', cellCodes(s.id, l.key, r))}${idNote(s.id, l.key)}
+      ${stmtList(r.statements, '', cellCodes(s.id, l.key, r), { id: s.id, level: l.key })}${idNote(s.id, l.key)}
       ${heirs ? `<span class="heirs" title="${heirs} sub-strand(s) inherit these statements">↓ shared with ${plural(heirs, 'sub-strand')}</span>` : ''}</div>`;
   }
 
@@ -377,8 +445,8 @@
     const node = n => {
       const s = n.s; const r = resolve(s.id, L.key);
       let body = '';
-      if (r.status === 'own') body = stmtList(r.statements, '', cellCodes(s.id, L.key, r)) + idNote(s.id, L.key);
-      else if (r.status === 'inherit') body = `<span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, L.key, r))}${idNote(s.id, L.key)}`;
+      if (r.status === 'own') body = stmtList(r.statements, '', cellCodes(s.id, L.key, r), { id: s.id, level: L.key }) + idNote(s.id, L.key);
+      else if (r.status === 'inherit') body = `<span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, L.key, r), { id: s.id, level: L.key })}${idNote(s.id, L.key)}`;
       else if (r.status === 'group') body = groupBody(s.id, L.key);
       else if (r.status === 'orphan') body = `<span class="ribbon warn">⚠ Nothing to inherit</span>`;
       else body = `<p class="muted-note">Not taught at ${L.name} level.</p>`;
@@ -488,6 +556,7 @@
                   </label>
                   <p class="inh-text">${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</p>
                   <p class="dup-warn" id="dup-${i}" role="status">${esc(idProblem(cur.codes[i] || '', t.text, id, level, i))}</p>
+                  ${(cur.codes[i] || '').trim() ? kdLink(id, level, i) : ''}
                 </div>
               </div>`).join('')}
             </div>` : stmtList(r.statements, 'faded big') + idBox(id, level)}
@@ -513,6 +582,7 @@
               </label>` : ''}
               <textarea class="autosize" rows="2" data-stmt="${i}" data-part="text" aria-label="Understanding statement ${i + 1}" placeholder="Learners understand that…">${esc(t.text)}</textarea>
               ${leaf ? `<p class="dup-warn" id="dup-${i}" role="status">${esc(idProblem(t.code, t.text, id, level, i))}</p>` : ''}
+              ${leaf && t.code.trim() ? kdLink(id, level, i) : ''}
             </div>
             <button class="icon-btn" data-action="del-stmt" data-i="${i}" title="Remove statement" aria-label="Remove statement ${i + 1}">×</button>
           </div>`).join('')}
@@ -621,10 +691,14 @@
     override() {
       const r = resolve(ui.drawer.id, ui.drawer.level);
       // Keep the IDs this strand gave the inherited statements; the source's own IDs stay with the source.
-      const codes = idx[ui.drawer.id].s.levels[ui.drawer.level]?.codes || [];
+      // Knows & dos written for those inherited statements move across with them.
+      const prev = idx[ui.drawer.id].s.levels[ui.drawer.level];
+      const codes = prev?.codes || [], kds = prev?.kd || [];
       idx[ui.drawer.id].s.levels[ui.drawer.level] = {
-        mode: 'own', codes,
-        statements: r.statements ? r.statements.map((t, i) => ({ code: codes[i] || '', text: t.text })) : [blankStmt()]
+        mode: 'own', codes, kd: [],
+        statements: r.statements
+          ? r.statements.map((t, i) => ({ code: codes[i] || '', text: t.text, ...(kds[i] ? { kd: kds[i] } : {}) }))
+          : [blankStmt()]
       };
       commit();
       $('#drawer [data-stmt="0"][data-part="text"]')?.focus();
@@ -693,7 +767,7 @@
     'del-idea'(t) { area().bigIdeas.splice(+t.dataset.i, 1); commit({ hero: true, drawer: false }); },
     'new-area'() {
       const a = { id: uid(), name: 'New curriculum area', purpose: '', bigIdeas: [{ name: '', description: '' }], strands: [] };
-      db.areas.push(a); db.currentId = a.id; ui.drawer = null; ui.collapsed.clear();
+      db.areas.push(a); db.currentId = a.id; ui.drawer = null; ui.collapsed.clear(); ui.page = 'structure'; ui.kd.sel = null;
       save(); render();
       const f = $('#f-name'); f.focus(); f.select();
     },
@@ -706,11 +780,580 @@
     import() { $('#importFile').click(); },
     reset() {
       if (!confirm('Replace everything with the demo data? Your changes will be lost.')) return;
-      db = normalise(clone(window.SEED)); ui.drawer = null; ui.collapsed.clear(); save(); render();
+      db = normalise(clone(window.SEED)); ui.drawer = null; ui.kd.sel = null; ui.collapsed.clear(); save(); render();
     }
   };
 
   function selectName() { const f = $('#strandName'); if (f) { f.focus(); f.select(); } }
+
+  /* =====================================================================
+     Knows & Dos
+     Every lowest-level understanding that has an ID can hold know and do
+     statements, grouped into collections. A collection is one row: its knows
+     on the left and its dos on the right, so related content lines up.
+     ===================================================================== */
+  const SIDES = { knows: 'Know', dos: 'Do' };
+  const sameRef = (a, b) => a && b && a.id === b.id && a.level === b.level && a.i === b.i;
+
+  /** The knows & dos for one understanding (strand × level × statement index). */
+  function getKD(ref, create) {
+    const n = idx[ref.id];
+    const L = n && n.s.levels[ref.level];
+    if (!L) return null;
+    if (L.mode === 'own') {
+      const st = L.statements[ref.i];
+      if (!st) return null;
+      if (!st.kd && create) st.kd = newKD();
+      return st.kd || null;
+    }
+    L.kd ||= [];
+    if (!L.kd[ref.i] && create) L.kd[ref.i] = newKD();
+    return L.kd[ref.i] || null;
+  }
+  function kdCount(ref) {
+    let K = 0, D = 0;
+    getKD(ref, false)?.collections.forEach(c => { K += c.knows.length; D += c.dos.length; });
+    return { K, D };
+  }
+
+  /** All lowest-level understandings in this area, in level then tree order. */
+  function understandings() {
+    const out = [];
+    LEVELS.forEach(l => {
+      const walk = list => list.forEach(s => {
+        const r = resolve(s.id, l.key);
+        const codes = cellCodes(s.id, l.key, r);
+        if (codes) r.statements.forEach((t, i) => {
+          if (!t.text.trim() && !(codes[i] || '').trim()) return;
+          out.push({ id: s.id, level: l.key, i, code: (codes[i] || '').trim(), text: t.text, inherited: r.status === 'inherit', source: r.source, path: idx[s.id].path });
+        });
+        walk(s.children);
+      });
+      walk(area().strands);
+    });
+    return out;
+  }
+
+  /* --- rich text: $inline$ and $$display$$ LaTeX, rendered with KaTeX --- */
+  function mathHTML(tex, display) {
+    if (window.katex) {
+      try { return katex.renderToString(tex, { throwOnError: false, displayMode: display }); } catch (e) { /* fall through */ }
+    }
+    return `<code class="tex">${esc(tex)}</code>`;
+  }
+  function renderRich(text) {
+    if (!text || !text.trim()) return '<em>Empty statement</em>';
+    const DOLLAR = '\u0000';                       // "\$" means a literal dollar sign
+    return text.replace(/\\\$/g, DOLLAR)
+      .split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/)
+      .map(p => {
+        if (p.length > 4 && p.startsWith('$$') && p.endsWith('$$')) return mathHTML(p.slice(2, -2), true);
+        if (p.length > 2 && p.startsWith('$') && p.endsWith('$')) return mathHTML(p.slice(1, -1), false);
+        return esc(p).replace(/\n/g, '<br>');
+      })
+      .join('')
+      .replace(/\u0000/g, '$');
+  }
+  function imagesHTML(images, cls = '') {
+    if (!images.length) return '';
+    return `<div class="kd-imgs ${cls}">${images.map(im => `<figure><img src="${esc(im.src)}" alt="${esc(im.alt)}">${im.alt ? `<figcaption>${esc(im.alt)}</figcaption>` : ''}</figure>`).join('')}</div>`;
+  }
+
+  /* --- page --- */
+  function renderKD() {
+    const page = $('#kd-page');
+    const all = understandings();
+    let sel = ui.kd.sel && all.find(u => sameRef(u, ui.kd.sel) && u.code);
+    if (!sel) {
+      sel = all.find(u => u.code) || null;
+      ui.kd.sel = sel ? { id: sel.id, level: sel.level, i: sel.i } : null;
+    }
+    if (location.hash !== kdHash()) history.replaceState(null, '', kdHash());
+    page.innerHTML = `
+      <div class="kd-layout">
+        <aside class="kd-nav" aria-label="Understandings">
+          <div class="kd-nav-head">
+            <h2>Understandings</h2>
+            <p>Choose an understanding to add the knows and dos that support it.</p>
+            <label class="sr-only" for="kdSearch">Search understandings</label>
+            <input id="kdSearch" class="kd-search" type="search" placeholder="Search by ID, statement or strand" value="${esc(ui.kd.q)}">
+            <div class="kd-levels" role="group" aria-label="Filter by level">
+              <button class="kd-lvl ${ui.kd.level === 'all' ? 'on' : ''}" data-action="kd-level" data-level="all">All</button>
+              ${LEVELS.map(l => `<button class="kd-lvl ${ui.kd.level === l.key ? 'on' : ''}" style="--lc:var(--${l.key})" data-action="kd-level" data-level="${l.key}">${l.name}</button>`).join('')}
+            </div>
+          </div>
+          <div id="kdNavList" class="kd-nav-list">${kdNavList(all)}</div>
+        </aside>
+        <section class="kd-main">${sel ? kdMain(sel, all) : kdEmpty(all)}</section>
+      </div>`;
+  }
+
+  function kdNavList(all) {
+    const q = ui.kd.q.trim().toLowerCase();
+    const shown = all.filter(u =>
+      (ui.kd.level === 'all' || u.level === ui.kd.level) &&
+      (!q || [u.code, u.text, ...u.path.map(p => p.name)].join(' ').toLowerCase().includes(q)));
+    if (!shown.length) return `<p class="muted-note kd-none">${all.length ? 'No understandings match.' : 'No understanding statements yet.'}</p>`;
+    let html = '', lastLevel = '';
+    shown.forEach(u => {
+      if (u.level !== lastLevel) { lastLevel = u.level; html += `<h3 class="kd-nav-level" style="--lc:var(--${u.level})"><span class="lvl-pill">${LV[u.level].name}</span></h3>`; }
+      const { K, D } = kdCount(u);
+      const on = sameRef(u, ui.kd.sel);
+      html += u.code
+        ? `<button class="kd-u ${on ? 'on' : ''}" style="--lc:var(--${u.level})" data-action="kd-select" data-id="${u.id}" data-level="${u.level}" data-i="${u.i}" ${on ? 'aria-current="true"' : ''}>
+            <span class="kd-u-top"><span class="sid">${esc(u.code)}</span><span class="kd-u-count ${K || D ? '' : 'zero'}">${K || D ? `K ${K} · D ${D}` : 'none yet'}</span></span>
+            <span class="kd-u-path">${u.path.map(p => esc(p.name)).join(' › ')}</span>
+            <span class="kd-u-text">${esc(u.text) || '<em>Empty statement</em>'}</span>
+          </button>`
+        : `<button class="kd-u noid" data-action="kd-fix-id" data-id="${u.id}" data-level="${u.level}" title="Give this statement an understanding ID in Structure first">
+            <span class="kd-u-top"><span class="sid missing">ID needed</span></span>
+            <span class="kd-u-path">${u.path.map(p => esc(p.name)).join(' › ')}</span>
+            <span class="kd-u-text">${esc(u.text)}</span>
+          </button>`;
+    });
+    return html;
+  }
+
+  function kdEmpty(all) {
+    const needIds = all.filter(u => !u.code).length;
+    return `<div class="empty">
+      <h3>No understandings with IDs yet</h3>
+      <p>Knows and dos are added to understandings. Write an understanding statement at the lowest level of a strand in Structure and give it an understanding ID.${needIds ? ` ${plural(needIds, 'statement')} ${needIds === 1 ? 'is' : 'are'} waiting for an ID.` : ''}</p>
+      <button class="btn primary" data-action="page" data-page="structure">Go to Structure</button>
+    </div>`;
+  }
+
+  function kdMain(sel, all) {
+    const withIds = all.filter(u => u.code);
+    const pos = withIds.findIndex(u => sameRef(u, sel));
+    const kd = getKD(sel, false) || newKD();
+    const L = LV[sel.level];
+    const head = `
+      <header class="kd-head" style="--lc:var(--${sel.level})">
+        <div class="kd-head-top">
+          <span class="lvl-pill">${L.name}</span>
+          <span class="sid big">${esc(sel.code)}</span>
+          <nav class="crumbs kd-crumbs">${esc(area().name)}${sel.path.map(p => ` <span>›</span> ${esc(p.name)}`).join('')}</nav>
+        </div>
+        <p class="kd-understanding">${esc(sel.text) || '<em>Empty statement</em>'}</p>
+        ${sel.inherited ? `<p class="kd-inh">↑ Statement inherited from ${esc(sel.source.name)}; the ID and these knows and dos belong to ${esc(sel.path[sel.path.length - 1].name)}.</p>` : ''}
+        <div class="kd-head-actions">
+          <button class="btn ghost" data-action="kd-structure">View in Structure</button>
+          <span class="grow"></span>
+          <button class="btn ghost" data-action="kd-step" data-dir="-1" ${pos <= 0 ? 'disabled' : ''}>← Previous</button>
+          <span class="kd-pos">${pos + 1} of ${withIds.length}</span>
+          <button class="btn ghost" data-action="kd-step" data-dir="1" ${pos >= withIds.length - 1 ? 'disabled' : ''}>Next →</button>
+        </div>
+      </header>`;
+
+    const bar = `
+      <div class="kd-bar">
+        <div class="seg" role="tablist" aria-label="Mode">
+          <button data-action="kd-mode" data-preview="0" role="tab" aria-selected="${!ui.kd.preview}">Edit</button>
+          <button data-action="kd-mode" data-preview="1" role="tab" aria-selected="${ui.kd.preview}">Preview</button>
+        </div>
+        ${ui.kd.preview ? '' : `
+          <label class="tog"><input type="checkbox" data-kdseq ${kd.sequenced ? 'checked' : ''}><span>Sequence collections</span></label>
+          <span class="grow"></span>
+          <button class="btn" data-action="kd-add-col">+ Add collection</button>`}
+      </div>`;
+
+    if (!kd.collections.length) {
+      return head + bar + `
+        <div class="kd-start">
+          <div class="kd-cols-head"><span>Know</span><span>Do</span></div>
+          <div class="kd-start-row">
+            <button class="kd-add big" data-action="kd-add-first" data-side="knows">+ Add a know statement</button>
+            <button class="kd-add big" data-action="kd-add-first" data-side="dos">+ Add a do statement</button>
+          </div>
+          <p class="hint">Knows and dos are grouped into collections. Each collection is one row, with its knows and dos side by side. Give a collection a name to show it as a heading, or leave it unnamed and use it just to line content up.</p>
+        </div>`;
+    }
+    return head + bar + (ui.kd.preview ? kdPreview(kd) : kdEditor(kd));
+  }
+
+  function kdEditor(kd) {
+    return `<div class="kd-cols-head"><span>Know</span><span>Do</span></div>
+      <div class="kd-collections">${kd.collections.map((c, ci) => `
+        <section class="kd-col ${c.name.trim() ? 'named' : ''}" data-col="${c.id}">
+          <header class="kd-col-head">
+            <span class="handle" draggable="true" data-drag="col" data-col="${c.id}" title="Drag to reorder collections" aria-hidden="true">⋮⋮</span>
+            ${kd.sequenced ? `<span class="col-num">${ci + 1}</span>` : ''}
+            <input class="col-name" data-colname="${c.id}" value="${esc(c.name)}" placeholder="Unnamed collection (name is optional)" aria-label="Collection name">
+            <label class="tog sm"><input type="checkbox" data-colseq="${c.id}" ${c.sequenced ? 'checked' : ''}><span>Numbered</span></label>
+            <button class="icon-btn sm" data-action="kd-col-move" data-col="${c.id}" data-dir="-1" ${ci === 0 ? 'disabled' : ''} aria-label="Move collection up" title="Move up">↑</button>
+            <button class="icon-btn sm" data-action="kd-col-move" data-col="${c.id}" data-dir="1" ${ci === kd.collections.length - 1 ? 'disabled' : ''} aria-label="Move collection down" title="Move down">↓</button>
+            <button class="icon-btn sm danger" data-action="kd-col-del" data-col="${c.id}" aria-label="Delete collection" title="Delete collection">×</button>
+          </header>
+          <div class="kd-col-body">
+            ${Object.keys(SIDES).map(side => `
+              <div class="kd-list" data-list="${c.id}" data-side="${side}">
+                <span class="kd-side-label">${SIDES[side]}</span>
+                ${c[side].map((it, ii) => `
+                  <div class="kd-item" draggable="true" data-drag="item" data-col="${c.id}" data-side="${side}" data-item="${it.id}">
+                    <span class="kd-marker">${c.sequenced ? ii + 1 : '•'}</span>
+                    <div class="kd-content" data-action="kd-edit" data-col="${c.id}" data-side="${side}" data-item="${it.id}" role="button" tabindex="0" aria-label="Edit ${SIDES[side].toLowerCase()} statement">
+                      ${renderRich(it.text)}${imagesHTML(it.images, 'thumbs')}
+                    </div>
+                    <div class="kd-item-actions">
+                      <button class="icon-btn sm" data-action="kd-item-move" data-col="${c.id}" data-side="${side}" data-item="${it.id}" data-dir="-1" ${ii === 0 ? 'disabled' : ''} aria-label="Move up" title="Move up">↑</button>
+                      <button class="icon-btn sm" data-action="kd-item-move" data-col="${c.id}" data-side="${side}" data-item="${it.id}" data-dir="1" ${ii === c[side].length - 1 ? 'disabled' : ''} aria-label="Move down" title="Move down">↓</button>
+                      <button class="icon-btn sm danger" data-action="kd-item-del" data-col="${c.id}" data-side="${side}" data-item="${it.id}" aria-label="Delete" title="Delete">×</button>
+                    </div>
+                  </div>`).join('')}
+                <button class="kd-add" data-action="kd-add" data-col="${c.id}" data-side="${side}">+ Add ${SIDES[side].toLowerCase()}</button>
+              </div>`).join('')}
+          </div>
+        </section>`).join('')}
+      </div>
+      <p class="hint kd-tip">Drag statements to reorder them or move them to another collection; drag ⋮⋮ to reorder collections. Click a statement to edit it.</p>`;
+  }
+
+  /** Read-only display: named collections become bold headings; unnamed ones just align content. */
+  function kdPreview(kd) {
+    const list = (c, side) => {
+      if (!c[side].length) return '<div class="kd-pv-list empty-side"></div>';
+      const tag = c.sequenced ? 'ol' : 'ul';
+      return `<div class="kd-pv-list"><span class="kd-side-label">${SIDES[side]}</span><${tag}>${c[side].map(it => `<li>${renderRich(it.text)}${imagesHTML(it.images)}</li>`).join('')}</${tag}></div>`;
+    };
+    return `<div class="kd-preview">
+      <div class="kd-cols-head"><span>Know</span><span>Do</span></div>
+      ${kd.collections.map((c, ci) => `
+        <section class="kd-pv-col ${c.name.trim() ? 'named' : ''}">
+          ${c.name.trim() || kd.sequenced ? `<h3 class="kd-pv-name">${kd.sequenced ? `<span class="col-num">${ci + 1}</span>` : ''}${esc(c.name.trim())}</h3>` : ''}
+          <div class="kd-pv-row">${list(c, 'knows')}${list(c, 'dos')}</div>
+        </section>`).join('')}
+    </div>`;
+  }
+
+  /* --- data operations --- */
+  const kdHere = () => getKD(ui.kd.sel, true);
+  const findCol = colId => kdHere().collections.find(c => c.id === colId);
+  function commitKD() { save(); renderKD(); }
+
+  function moveItem(fromCol, side, itemId, toCol, beforeId) {
+    const from = findCol(fromCol), to = findCol(toCol);
+    if (!from || !to) return;
+    const i = from[side].findIndex(x => x.id === itemId);
+    if (i < 0) return;
+    const [item] = from[side].splice(i, 1);
+    const j = beforeId ? to[side].findIndex(x => x.id === beforeId) : -1;
+    to[side].splice(j < 0 ? to[side].length : j, 0, item);
+  }
+  function moveCol(colId, beforeId) {
+    const cols = kdHere().collections;
+    const i = cols.findIndex(c => c.id === colId);
+    if (i < 0 || colId === beforeId) return;
+    const [c] = cols.splice(i, 1);
+    const j = beforeId ? cols.findIndex(x => x.id === beforeId) : -1;
+    cols.splice(j < 0 ? cols.length : j, 0, c);
+  }
+
+  Object.assign(actions, {
+    page(t) { ui.page = t.dataset.page; ui.ed = null; render(); window.scrollTo(0, 0); },
+    'open-kd'(t) { ui.kd.sel = { id: t.dataset.id, level: t.dataset.level, i: +t.dataset.i }; ui.page = 'kd'; render(); window.scrollTo(0, 0); },
+    'kd-select'(t) { ui.kd.sel = { id: t.dataset.id, level: t.dataset.level, i: +t.dataset.i }; renderKD(); },
+    'kd-fix-id'(t) { ui.page = 'structure'; render(); openDrawer({ type: 'cell', id: t.dataset.id, level: t.dataset.level }); },
+    'kd-structure'() { const s = ui.kd.sel; ui.page = 'structure'; render(); openDrawer({ type: 'cell', id: s.id, level: s.level }); },
+    'kd-level'(t) { ui.kd.level = t.dataset.level; renderKD(); },
+    'kd-step'(t) {
+      const list = understandings().filter(u => u.code);
+      const next = list[list.findIndex(u => sameRef(u, ui.kd.sel)) + +t.dataset.dir];
+      if (next) { ui.kd.sel = { id: next.id, level: next.level, i: next.i }; renderKD(); }
+    },
+    'kd-mode'(t) { ui.kd.preview = t.dataset.preview === '1'; renderKD(); },
+    'kd-add-col'() {
+      const c = newCollection();
+      kdHere().collections.push(c);
+      commitKD();
+      $(`[data-colname="${c.id}"]`)?.focus();
+    },
+    'kd-add-first'(t) {
+      const c = newCollection();
+      kdHere().collections.push(c);
+      save();
+      openEditor({ col: c.id, side: t.dataset.side, item: null });
+    },
+    'kd-col-move'(t) {
+      const cols = kdHere().collections;
+      const i = cols.findIndex(c => c.id === t.dataset.col), j = i + +t.dataset.dir;
+      if (j < 0 || j >= cols.length) return;
+      [cols[i], cols[j]] = [cols[j], cols[i]];
+      commitKD();
+    },
+    'kd-col-del'(t) {
+      const kd = kdHere(), c = findCol(t.dataset.col);
+      const n = c.knows.length + c.dos.length;
+      if (n && !confirm(`Delete ${c.name.trim() ? `“${c.name.trim()}”` : 'this collection'} and its ${plural(n, 'statement')}?`)) return;
+      kd.collections = kd.collections.filter(x => x !== c);
+      commitKD();
+    },
+    'kd-add'(t) { openEditor({ col: t.dataset.col, side: t.dataset.side, item: null }); },
+    'kd-edit'(t) { openEditor({ col: t.dataset.col, side: t.dataset.side, item: t.dataset.item }); },
+    'kd-item-move'(t) {
+      const list = findCol(t.dataset.col)[t.dataset.side];
+      const i = list.findIndex(x => x.id === t.dataset.item), j = i + +t.dataset.dir;
+      if (j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      commitKD();
+    },
+    'kd-item-del'(t) {
+      const c = findCol(t.dataset.col), side = t.dataset.side;
+      if (!confirm(`Delete this ${SIDES[side].toLowerCase()} statement?`)) return;
+      c[side] = c[side].filter(x => x.id !== t.dataset.item);
+      commitKD();
+    },
+    // editor
+    'ed-close'() { closeEditor(); },
+    'ed-save'() { saveEditor(); },
+    'ed-delete'() {
+      const { col, side, item } = ui.ed;
+      if (!confirm(`Delete this ${SIDES[side].toLowerCase()} statement?`)) return;
+      const c = findCol(col); c[side] = c[side].filter(x => x.id !== item);
+      closeEditor(); commitKD();
+    },
+    'ed-sym'(t) { insertAtCursor($('#edText'), t.dataset.sym); edPreview(); },
+    'ed-eq'() { const p = $('#eqPanel'); p.hidden = !p.hidden; if (!p.hidden) $('#eqLatex').focus(); },
+    'eq-tpl'(t) { insertAtCursor($('#eqLatex'), t.dataset.tpl); eqPreview(); },
+    'eq-insert'() {
+      const tex = $('#eqLatex').value.trim();
+      if (!tex) return;
+      const display = $('#eqDisplay').checked;
+      insertAtCursor($('#edText'), display ? `$$${tex}$$` : `$${tex}$`);
+      $('#eqLatex').value = ''; eqPreview(); $('#eqPanel').hidden = true;
+      edPreview(); $('#edText').focus();
+    },
+    'ed-img'() { $('#imageFile').click(); },
+    'ed-img-del'(t) { ui.ed.images = ui.ed.images.filter(im => im.id !== t.dataset.img); renderEdImages(); edPreview(); }
+  });
+
+  /* --- statement editor (modal) --- */
+  const SYMBOLS = [
+    ['Operators', ['+', '−', '×', '÷', '±', '=', '≠', '≈', '<', '>', '≤', '≥', '∝']],
+    ['Number', ['√', '∛', '²', '³', 'ⁿ', '½', '¼', '¾', 'π', '∞', '%', '‰']],
+    ['Geometry', ['°', '∠', '△', '⊥', '∥', '≅', '∼', '⌒']],
+    ['Sets & logic', ['∈', '∉', '⊂', '∪', '∩', '∅', '→', '⇒', '⇔', '∴']],
+    ['Greek', ['α', 'β', 'γ', 'δ', 'θ', 'λ', 'μ', 'ρ', 'σ', 'ω', 'Δ', 'Σ', 'Ω']]
+  ];
+  const TEMPLATES = [
+    ['Fraction', '\\frac{a}{b}', '\\frac{a}{b}'],
+    ['Power', 'x^{n}', 'x^{n}'],
+    ['Subscript', 'x_{1}', 'x_{1}'],
+    ['Square root', '\\sqrt{x}', '\\sqrt{x}'],
+    ['nth root', '\\sqrt[n]{x}', '\\sqrt[n]{x}'],
+    ['Sum', '\\sum_{i=1}^{n} x_i', '\\sum_{i=1}^{n} x_i'],
+    ['Integral', '\\int_{a}^{b} f(x)\\,dx', '\\int_{a}^{b} f(x)\\,dx'],
+    ['Brackets', '\\left( x \\right)', '\\left( x \\right)'],
+    ['Vector', '\\vec{v}', '\\vec{v}'],
+    ['Units', '\\text{m s}^{-1}', '\\text{m s}^{-1}'],
+    ['Times', '\\times', '\\times'],
+    ['Pi', '\\pi', '\\pi']
+  ];
+
+  function openEditor({ col, side, item }) {
+    const c = findCol(col);
+    const it = item ? c[side].find(x => x.id === item) : null;
+    ui.ed = { col, side, item, text: it ? it.text : '', images: it ? it.images.map(im => ({ ...im })) : [] };
+    const sel = understandings().find(u => sameRef(u, ui.kd.sel));
+    const m = $('#modal');
+    m.hidden = false;
+    m.innerHTML = `
+      <div class="modal-backdrop" data-action="ed-close"></div>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="edTitle" style="--lc:var(--${ui.kd.sel.level})">
+        <header class="modal-head">
+          <div>
+            <h2 id="edTitle">${it ? 'Edit' : 'Add'} ${SIDES[side].toLowerCase()} statement</h2>
+            <p class="dr-sub">Supports <span class="sid">${esc(sel?.code || '')}</span> ${esc(sel?.text || '')}</p>
+          </div>
+          <button class="icon-btn" data-action="ed-close" aria-label="Close">×</button>
+        </header>
+        <div class="modal-body">
+          <div class="ed-toolbar" role="toolbar" aria-label="Insert symbols">
+            ${SYMBOLS.map(([label, syms]) => `<div class="sym-group" role="group" aria-label="${label}"><span class="sym-label">${label}</span>${syms.map(s => `<button class="sym" data-action="ed-sym" data-sym="${s}" title="Insert ${s}">${s}</button>`).join('')}</div>`).join('')}
+          </div>
+          <div class="ed-actions">
+            <button class="btn" data-action="ed-eq">ƒ(x) Equation</button>
+            <button class="btn" data-action="ed-img">Add image</button>
+            <span class="hint">Or paste an image straight into the text box.</span>
+          </div>
+          <div id="eqPanel" class="eq-panel" hidden>
+            <div class="eq-tpls">${TEMPLATES.map(([label, tpl, prev]) => `<button class="eq-tpl" data-action="eq-tpl" data-tpl="${esc(tpl)}" title="${label}">${mathHTML(prev, false)}<small>${label}</small></button>`).join('')}</div>
+            <label class="eq-field"><span>Equation (LaTeX)</span>
+              <input id="eqLatex" autocomplete="off" spellcheck="false" placeholder="e.g. P = \\frac{F}{A}">
+            </label>
+            <div id="eqPreview" class="eq-preview" aria-live="polite"><span class="muted-note">Preview appears here</span></div>
+            <div class="eq-foot">
+              <label class="tog sm"><input type="checkbox" id="eqDisplay"><span>On its own line</span></label>
+              <span class="grow"></span>
+              <button class="btn primary" data-action="eq-insert">Insert equation</button>
+            </div>
+          </div>
+          <label class="sr-only" for="edText">${SIDES[side]} statement</label>
+          <textarea id="edText" class="ed-text autosize" rows="3" placeholder="${side === 'knows' ? 'Learners know that…' : 'Learners can…'}">${esc(ui.ed.text)}</textarea>
+          <p class="hint">Equations go between dollar signs, e.g. <code>$\\frac{1}{2}$</code>. Use <code>\\$</code> for a dollar sign.</p>
+          <div id="edImages" class="ed-images"></div>
+          <div class="ed-preview-wrap">
+            <span class="eyebrow">Preview</span>
+            <div id="edPreview" class="ed-preview"></div>
+          </div>
+        </div>
+        <footer class="modal-foot">
+          ${it ? '<button class="btn danger" data-action="ed-delete">Delete</button>' : ''}
+          <span class="grow"></span>
+          <button class="btn ghost" data-action="ed-close">Cancel</button>
+          <button class="btn primary" data-action="ed-save">${it ? 'Save' : 'Add'} <small class="kbd">⌘↵</small></button>
+        </footer>
+      </div>`;
+    renderEdImages(); edPreview();
+    const ta = $('#edText'); autosize(ta); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
+  function renderEdImages() {
+    $('#edImages').innerHTML = ui.ed.images.map(im => `
+      <div class="ed-img">
+        <img src="${esc(im.src)}" alt="">
+        <input data-imgalt="${im.id}" value="${esc(im.alt)}" placeholder="Describe the image (alt text)" aria-label="Image description">
+        <button class="icon-btn sm danger" data-action="ed-img-del" data-img="${im.id}" aria-label="Remove image" title="Remove image">×</button>
+      </div>`).join('');
+  }
+  function edPreview() {
+    if (!ui.ed) return;
+    ui.ed.text = $('#edText').value;
+    $('#edPreview').innerHTML = ui.ed.text.trim() || ui.ed.images.length
+      ? renderRich(ui.ed.text) + imagesHTML(ui.ed.images)
+      : '<span class="muted-note">Start typing to see the statement.</span>';
+  }
+  function eqPreview() {
+    const tex = $('#eqLatex').value.trim();
+    $('#eqPreview').innerHTML = tex ? mathHTML(tex, true) : '<span class="muted-note">Preview appears here</span>';
+  }
+  function closeEditor() { ui.ed = null; const m = $('#modal'); m.hidden = true; m.innerHTML = ''; }
+  function saveEditor() {
+    const e = ui.ed;
+    if (!e) return;
+    e.text = $('#edText').value;
+    if (!e.text.trim() && !e.images.length) { $('#edText').focus(); return; }
+    const c = findCol(e.col);
+    if (e.item) Object.assign(c[e.side].find(x => x.id === e.item), { text: e.text, images: e.images });
+    else c[e.side].push({ id: uid(), text: e.text, images: e.images });
+    closeEditor();
+    commitKD();
+  }
+  function insertAtCursor(el, str) {
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + str + el.value.slice(b);
+    el.focus();
+    el.setSelectionRange(a + str.length, a + str.length);
+    if (el.classList.contains('autosize')) autosize(el);
+  }
+
+  /** Downscale an image to at most 1000px and store it as a data URL, to keep browser storage small. */
+  function readImage(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = reject;
+      fr.onload = () => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          const k = Math.min(1, 1000 / Math.max(img.width, img.height));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+          const g = c.getContext('2d');
+          const png = c.toDataURL && file.type === 'image/png';
+          if (!png) { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); }
+          g.drawImage(img, 0, 0, c.width, c.height);
+          const out = png ? c.toDataURL('image/png') : '';
+          resolve(out && out.length < 400000 ? out : c.toDataURL('image/jpeg', 0.85));
+        };
+        img.src = fr.result;
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+  async function addImages(files) {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      try { ui.ed.images.push({ id: uid(), src: await readImage(f), alt: '' }); }
+      catch (e) { alert(`Could not read “${f.name}” as an image.`); }
+    }
+    renderEdImages(); edPreview();
+  }
+
+  /* --- Knows & Dos events --- */
+  $('#imageFile').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (ui.ed) addImages(files); });
+  document.addEventListener('paste', e => {
+    if (!ui.ed) return;
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); addImages(files); }
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.id === 'kdSearch') { ui.kd.q = t.value; $('#kdNavList').innerHTML = kdNavList(understandings()); }
+    else if (t.dataset.colname) { const c = findCol(t.dataset.colname); c.name = t.value; save(); t.closest('.kd-col').classList.toggle('named', !!t.value.trim()); }
+    else if (t.id === 'edText') { autosize(t); edPreview(); }
+    else if (t.id === 'eqLatex') eqPreview();
+    else if (t.dataset.imgalt) { const im = ui.ed.images.find(x => x.id === t.dataset.imgalt); if (im) im.alt = t.value; edPreview(); }
+  });
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (t.matches('[data-kdseq]')) { kdHere().sequenced = t.checked; commitKD(); }
+    else if (t.dataset.colseq) { findCol(t.dataset.colseq).sequenced = t.checked; commitKD(); }
+  });
+
+  // Drag and drop: statements within or between collections (same side), and whole collections.
+  let drag = null;
+  const clearDrop = () => $$('.drop-before, .drop-end, .dragging').forEach(x => x.classList.remove('drop-before', 'drop-end', 'dragging'));
+  document.addEventListener('dragstart', e => {
+    const el = e.target.closest?.('[data-drag]');
+    if (!el || ui.page !== 'kd') return;
+    drag = { ...el.dataset };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', drag.item || drag.col);
+    const ghost = drag.drag === 'col' ? el.closest('.kd-col') : el;
+    if (drag.drag === 'col') e.dataTransfer.setDragImage(ghost, 20, 20);
+    requestAnimationFrame(() => ghost.classList.add('dragging'));
+  });
+  document.addEventListener('dragover', e => {
+    if (!drag) return;
+    $$('.drop-before, .drop-end').forEach(x => x.classList.remove('drop-before', 'drop-end'));
+    if (drag.drag === 'item') {
+      const item = e.target.closest('.kd-item'), list = e.target.closest('.kd-list');
+      if (!list || list.dataset.side !== drag.side) return;
+      e.preventDefault();
+      if (item && item.dataset.item !== drag.item) item.classList.add('drop-before');
+      else if (!item) list.classList.add('drop-end');
+    } else {
+      const col = e.target.closest('.kd-col'), wrap = e.target.closest('.kd-collections');
+      if (!wrap) return;
+      e.preventDefault();
+      if (col && col.dataset.col !== drag.col) col.classList.add('drop-before');
+      else if (!col) wrap.classList.add('drop-end');
+    }
+  });
+  document.addEventListener('drop', e => {
+    if (!drag) return;
+    e.preventDefault();
+    if (drag.drag === 'item') {
+      const list = e.target.closest('.kd-list');
+      if (list && list.dataset.side === drag.side) {
+        const before = e.target.closest('.kd-item');
+        moveItem(drag.col, drag.side, drag.item, list.dataset.list, before && before.dataset.item !== drag.item ? before.dataset.item : null);
+        if (!before || before.dataset.item !== drag.item) commitKD();
+      }
+    } else {
+      const col = e.target.closest('.kd-col');
+      moveCol(drag.col, col ? col.dataset.col : null);
+      commitKD();
+    }
+    drag = null; clearDrop();
+  });
+  document.addEventListener('dragend', () => { drag = null; clearDrop(); });
+
+  function kdLink(id, level, i) {
+    const { K, D } = kdCount({ id, level, i });
+    return `<button class="kd-link" data-action="open-kd" data-id="${id}" data-level="${level}" data-i="${i}">Knows &amp; Dos <span>K ${K} · D ${D}</span> →</button>`;
+  }
 
   /* ---------- events ---------- */
   document.addEventListener('click', e => {
@@ -721,6 +1364,8 @@
   });
 
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && ui.ed) { closeEditor(); return; }
+    if (ui.ed && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(); return; }
     if (e.key === 'Escape' && ui.drawer) { actions['close-drawer'](); return; }
     const t = e.target;
     if ((e.key === 'Enter' || e.key === ' ') && t.matches('[role="button"][data-action]')) { e.preventDefault(); t.click(); }
@@ -756,7 +1401,7 @@
   });
 
   $('#areaSelect').addEventListener('change', e => {
-    db.currentId = e.target.value; ui.drawer = null; ui.collapsed.clear(); save(); render();
+    db.currentId = e.target.value; ui.drawer = null; ui.kd.sel = null; ui.collapsed.clear(); save(); render();
   });
 
   $('#importFile').addEventListener('change', async e => {
@@ -765,7 +1410,7 @@
     try {
       const d = JSON.parse(await f.text());
       if (!d || !Array.isArray(d.areas) || !d.areas.length) throw new Error('No curriculum areas found in this file.');
-      db = normalise(d); db.currentId ||= d.areas[0].id; ui.drawer = null; save(); render();
+      db = normalise(d); db.currentId ||= d.areas[0].id; ui.drawer = null; ui.kd.sel = null; save(); render();
     } catch (err) { alert('Could not import: ' + err.message); }
   });
 

@@ -246,5 +246,75 @@
   assignIds(technologies, 'TCH');
   assignIds(arts, 'EXA');
 
+  /* --- Example knows & dos --- */
+  let k = 0;
+  const item = (text, images = []) => ({ id: 'kdi' + (++k), text, images });
+  const col = (name, sequenced, knows, dos) => ({ id: 'kdc' + (++k), name, sequenced, knows: knows.map(t => typeof t === 'string' ? item(t) : t), dos: dos.map(t => typeof t === 'string' ? item(t) : t) });
+  /** Attach knows & dos to the `i`th understanding of the first strand called `name` at `lvl`. */
+  function attach(area, name, lvl, i, kd) {
+    const find = list => { for (const s of list) { if (s.name === name) return s; const f = find(s.children); if (f) return f; } return null; };
+    const L = find(area.strands).levels[lvl];
+    if (L.mode === 'own') L.statements[i].kd = kd;
+    else { L.kd = L.kd || []; L.kd[i] = kd; }
+  }
+
+  // A simple labelled diagram, stored like an uploaded image (a data URL).
+  const pressureDiagram = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 170" font-family="Helvetica,Arial,sans-serif">' +
+    '<rect width="320" height="170" fill="#fff"/>' +
+    '<rect x="40" y="70" width="80" height="60" fill="#c9d8f0" stroke="#1f1c24" stroke-width="2"/>' +
+    '<rect x="190" y="100" width="100" height="30" fill="#c9d8f0" stroke="#1f1c24" stroke-width="2"/>' +
+    '<line x1="10" y1="131" x2="310" y2="131" stroke="#1f1c24" stroke-width="3"/>' +
+    '<line x1="80" y1="20" x2="80" y2="62" stroke="#b5442a" stroke-width="3"/><path d="M72 56 L80 68 L88 56Z" fill="#b5442a"/>' +
+    '<line x1="240" y1="50" x2="240" y2="92" stroke="#b5442a" stroke-width="3"/><path d="M232 86 L240 98 L248 86Z" fill="#b5442a"/>' +
+    '<text x="90" y="34" font-size="14" fill="#b5442a">F</text><text x="250" y="64" font-size="14" fill="#b5442a">F</text>' +
+    '<text x="40" y="155" font-size="12" fill="#1f1c24">small area: high pressure</text>' +
+    '<text x="180" y="155" font-size="12" fill="#1f1c24">large area: low pressure</text></svg>');
+
+  attach(sciences, 'Forces', 'third', 0, {
+    sequenced: true,
+    collections: [
+      col('Calculating pressure', true, [
+        'Pressure is the force acting on each unit of area: $P = \\frac{F}{A}$',
+        'Pressure is measured in pascals, where $1\\,\\text{Pa} = 1\\,\\text{N m}^{-2}$.',
+        item('The same force spread over a larger area gives a smaller pressure.', [{ id: 'img1', src: pressureDiagram, alt: 'The same force on a small area and on a large area' }])
+      ], [
+        'Rearrange $P = \\frac{F}{A}$ to find force or area.',
+        'Calculate the pressure under a block resting on each of its faces.'
+      ]),
+      col('Pressure in everyday life', false, [
+        'Sharp blades and snowshoes work by changing the area a force acts on.'
+      ], [
+        'Explain, using the idea of pressure, why a knife cuts more easily when it is sharp.'
+      ])
+    ]
+  });
+
+  attach(technologies, 'Systems', 'early', 0, {
+    sequenced: false,
+    collections: [
+      col('', false, [
+        'Objects can be taken apart into smaller parts.',
+        'Each part of an object has a job to do.'
+      ], [
+        'Take apart a simple toy and name some of its parts.',
+        'Say what one part does and what would happen without it.'
+      ])
+    ]
+  });
+
+  attach(technologies, 'Engineering', 'first', 0, {
+    sequenced: false,
+    collections: [
+      col('Inputs, processes and outputs', true, [
+        'An input is what goes into a system.',
+        'A process changes the input.',
+        'An output is what the system produces.'
+      ], [
+        'Identify the input, process and output of a familiar machine, such as a toaster.'
+      ])
+    ]
+  });
+
   window.SEED = { currentId: sciences.id, areas: [sciences, technologies, arts] };
 })();
