@@ -397,6 +397,24 @@ body.drawer-open main { padding-right: calc(var(--drawer-w) + 24px); }
   color: color-mix(in oklab, var(--lc) 80%, black); background: color-mix(in oklab, var(--lc) 14%, white);
 }
 .stmts.big .sid { font-size: 11.5px; }
+
+/* where IDs live: cells above the lowest level point down to their sub-strands */
+.id-note {
+  display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--muted);
+  border: 1px dashed var(--line-strong); border-radius: 999px; padding: 0 7px; background: rgba(255,255,255,.7);
+}
+.id-box {
+  width: 100%; padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+  background: #f7f4ee; border: 1px dashed var(--line-strong); margin-bottom: 4px;
+}
+.id-box b { display: block; margin-bottom: 2px; }
+.id-box ul { margin: 6px 0 0; padding-left: 18px; }
+.id-box button { border: 0; background: none; padding: 0; text-decoration: underline; font-weight: 600; }
+.inh-explain .id-box { margin-top: 12px; background: rgba(255,255,255,.8); }
+.id-lead { font-size: 13.5px; }
+.inh-ids { display: grid; gap: 12px; margin: 10px 0 14px; }
+.inh-id-row { display: flex; gap: 8px; align-items: flex-start; }
+.inh-text { margin: 0; font-style: italic; color: var(--muted); font-size: 14px; }
 .heirs-box { width: 100%; margin-top: 8px; padding: 12px 14px; border-radius: 10px; background: #f7f4ee; font-size: 13px; }
 .heirs-box ul { margin: 6px 0 0; padding-left: 18px; }
 .heirs-box button { border: 0; background: none; padding: 0; text-decoration: underline; font-weight: 600; }

@@ -164,26 +164,75 @@
     ]
   };
 
-  // Give every written statement a demo understanding ID, e.g. "SCN 2-03"
-  // (area prefix, level number 0–4, running number within that level).
+  const technologies = {
+    id: 'area-technologies',
+    name: 'Technologies',
+    purpose: 'Technologies develop learners as confident, creative designers and makers who understand how technological systems shape their lives, and who use them responsibly.',
+    bigIdeas: [
+      { name: 'Systems thinking', description: 'Technological products are systems of connected parts with inputs, processes and outputs.' },
+      { name: 'Design', description: 'Good design responds to real needs and improves through testing and feedback.' }
+    ],
+    strands: [
+      S('Systems', {
+        early: 'Everyday objects are made of parts that work together.',
+        first: 'A system takes an input, does something with it and gives an output.',
+        second: 'A system can be broken down into smaller parts, each with its own job.',
+        third: 'Feedback lets a system check and adjust its own behaviour.',
+        fourth: 'Complex systems are designed by managing how their sub-systems interact.'
+      }, [
+        S('Engineering', {
+          second: 'Mechanisms such as levers and gears change the size and direction of a force.',
+          third: '^'
+        }),
+        S('Computing', {
+          second: '^',
+          third: 'Algorithms can control a system and respond to its sensors.'
+        })
+      ], 'How technological systems are put together and controlled.'),
+      S('Design and making', {
+        early: 'We can plan and make things for a purpose.',
+        first: 'Designs can be improved by testing them.',
+        second: 'Designers choose materials and tools to suit a brief.',
+        third: 'Designing for users means understanding their needs.',
+        fourth: 'Sustainable design considers a product’s whole life cycle.'
+      })
+    ]
+  };
+
+  // Give demo understanding IDs, e.g. "SCN 2-03" (area prefix, level 0–4, running number),
+  // only at the lowest level of understanding: a strand gets IDs at a level only when none of
+  // its sub-strands are taught there. Sub-strands that inherit still get their own IDs.
   function assignIds(area, prefix) {
     const nums = ['early', 'first', 'second', 'third', 'fourth'];
     const count = {};
-    const walk = list => list.forEach(s => {
+    const next = (lvl, d) => {
+      count[lvl] = (count[lvl] || 0) + 1;
+      return `${prefix} ${d}-${String(count[lvl]).padStart(2, '0')}`;
+    };
+    const walk = (list, parentShown) => list.forEach(s => {
+      const shown = {};
       nums.forEach((lvl, d) => {
         const L = s.levels[lvl];
-        if (L?.mode !== 'own') return;
-        L.statements = L.statements.map(text => {
-          count[lvl] = (count[lvl] || 0) + 1;
-          return { code: `${prefix} ${d}-${String(count[lvl]).padStart(2, '0')}`, text };
-        });
+        if (!L) return;
+        L.codes = [];
+        if (L.mode === 'own') {
+          L.statements = L.statements.map(text => ({ code: '', text }));
+          shown[lvl] = L.statements;
+        } else {
+          shown[lvl] = parentShown[lvl] || [];
+        }
+        const lowest = !s.children.some(c => c.levels[lvl]);
+        if (!lowest) return;
+        if (L.mode === 'own') L.statements.forEach(t => { t.code = next(lvl, d); });
+        else L.codes = shown[lvl].map(() => next(lvl, d));
       });
-      walk(s.children);
+      walk(s.children, shown);
     });
-    walk(area.strands);
+    walk(area.strands, {});
   }
   assignIds(sciences, 'SCN');
+  assignIds(technologies, 'TCH');
   assignIds(arts, 'EXA');
 
-  window.SEED = { currentId: sciences.id, areas: [sciences, arts] };
+  window.SEED = { currentId: sciences.id, areas: [sciences, technologies, arts] };
 })();

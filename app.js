@@ -37,7 +37,11 @@
   // they are now { name, description } and { code, text }.
   function normalise(d) {
     const fixStrands = list => (list || []).forEach(s => {
-      Object.values(s.levels || {}).forEach(L => { L.statements = (L.statements || []).map(toStmt); });
+      Object.values(s.levels || {}).forEach(L => {
+        L.statements = (L.statements || []).map(toStmt);
+        // IDs for inherited statements, entered on the inheriting (lowest-level) strand.
+        L.codes = Array.isArray(L.codes) ? L.codes.map(c => c || '') : [];
+      });
       fixStrands(s.children);
     });
     d.areas.forEach(a => {
@@ -101,21 +105,37 @@
   function applyLevel(s, lvl) {
     const prev = s.levels[lvl];
     s.levels[lvl] = canInherit(s.id, lvl)
-      ? { mode: 'inherit', statements: prev?.statements || [] }
-      : { mode: 'own', statements: prev?.statements?.length ? prev.statements : [blankStmt()] };
+      ? { mode: 'inherit', statements: prev?.statements || [], codes: prev?.codes || [] }
+      : { mode: 'own', statements: prev?.statements?.length ? prev.statements : [blankStmt()], codes: prev?.codes || [] };
   }
 
-  /** Other places in this area whose own statements use `code` (case-insensitive). */
+  /* Understanding IDs live at the lowest level of understanding: a strand holds the
+     IDs at a level only when none of its sub-strands are taught at that level.
+     Otherwise the IDs are entered on the sub-strands (even ones that inherit). */
+  function isLeaf(id, lvl) {
+    const s = idx[id].s;
+    return !!s.levels[lvl] && !s.children.some(c => c.levels[lvl]);
+  }
+  const taughtKids = (id, lvl) => idx[id].s.children.filter(c => c.levels[lvl]);
+
+  /** IDs lined up with the statements a cell shows, or null when its IDs belong to sub-strands. */
+  function cellCodes(id, lvl, r = resolve(id, lvl)) {
+    if (!isLeaf(id, lvl)) return null;
+    const L = idx[id].s.levels[lvl];
+    if (r.status === 'own') return L.statements.map(t => t.code);
+    if (r.status === 'inherit') return r.statements.map((_, i) => L.codes[i] || '');
+    return null;
+  }
+
+  /** Other lowest-level places in this area that use `code` (case-insensitive). */
   function codeClashes(code, selfId, selfLevel, selfIndex) {
     const c = code.trim().toLowerCase();
     if (!c) return [];
     const out = [];
     Object.values(idx).forEach(n => LEVELS.forEach(l => {
-      const L = n.s.levels[l.key];
-      if (L?.mode !== 'own') return;
-      L.statements.forEach((t, i) => {
+      (cellCodes(n.s.id, l.key) || []).forEach((k, i) => {
         if (n.s.id === selfId && l.key === selfLevel && i === selfIndex) return;
-        if (t.code.trim().toLowerCase() === c) out.push(`${n.s.name} (${l.name})`);
+        if (k.trim().toLowerCase() === c) out.push(`${n.s.name} (${l.name})`);
       });
     }));
     return out;
@@ -258,9 +278,17 @@
     return tree + LEVELS.map(l => `<div class="slot ${isTop ? 'row-top' : ''} ${sel ? 'row-sel' : ''}">${cellHTML(n, l)}</div>`).join('');
   }
 
-  function stmtList(list, cls = '') {
-    if (!list.length || list.every(t => !t.text.trim() && !t.code.trim())) return `<p class="muted-note">No statements yet — click to write one.</p>`;
-    return `<ol class="stmts ${cls}">${list.map(t => `<li>${t.code.trim() ? `<span class="sid">${esc(t.code)}</span> ` : ''}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+  /** `codes` lines up with `list`; pass null where IDs belong to sub-strands. */
+  function stmtList(list, cls = '', codes = null) {
+    const code = i => (codes && codes[i] || '').trim();
+    if (!list.length || list.every((t, i) => !t.text.trim() && !code(i))) return `<p class="muted-note">No statements yet — click to write one.</p>`;
+    return `<ol class="stmts ${cls}">${list.map((t, i) => `<li>${code(i) ? `<span class="sid">${esc(code(i))}</span> ` : ''}${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</li>`).join('')}</ol>`;
+  }
+  /** Shown on a cell whose IDs are entered further down, on its sub-strands. */
+  function idNote(id, lvl) {
+    if (isLeaf(id, lvl)) return '';
+    const k = taughtKids(id, lvl).length;
+    return `<span class="id-note" title="Understanding IDs at this level are entered on the sub-strands">IDs on ${plural(k, 'sub-strand')} ↓</span>`;
   }
 
   function cellHTML(n, l) {
@@ -277,11 +305,11 @@
     }
     if (r.status === 'inherit') {
       return `<div class="cell inh ${sel}" ${base} data-src="${r.source.id}:${l.key}" data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
-        <span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded')}</div>`;
+        <span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, l.key, r))}${idNote(s.id, l.key)}</div>`;
     }
     const heirs = inheritorsOf(s.id, l.key).length;
     return `<div class="cell own ${sel}" ${base} data-action="edit-cell" data-id="${s.id}" data-level="${l.key}">
-      ${stmtList(r.statements)}
+      ${stmtList(r.statements, '', cellCodes(s.id, l.key, r))}${idNote(s.id, l.key)}
       ${heirs ? `<span class="heirs" title="${heirs} sub-strand(s) inherit these statements">↓ shared with ${plural(heirs, 'sub-strand')}</span>` : ''}</div>`;
   }
 
@@ -299,8 +327,8 @@
     const node = n => {
       const s = n.s; const r = resolve(s.id, L.key);
       let body = '';
-      if (r.status === 'own') body = stmtList(r.statements);
-      else if (r.status === 'inherit') body = `<span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded')}`;
+      if (r.status === 'own') body = stmtList(r.statements, '', cellCodes(s.id, L.key, r)) + idNote(s.id, L.key);
+      else if (r.status === 'inherit') body = `<span class="ribbon">↑ from ${esc(r.source.name)}</span>${stmtList(r.statements, 'faded', cellCodes(s.id, L.key, r))}${idNote(s.id, L.key)}`;
       else if (r.status === 'orphan') body = `<span class="ribbon warn">⚠ Nothing to inherit</span>`;
       else body = `<p class="muted-note">Not taught at ${L.name} level.</p>`;
       const action = r.status === 'na' ? 'apply' : 'edit-cell';
@@ -349,6 +377,15 @@
         <i></i>${l.name}</button>`;
     }).join('')}</div>`;
   }
+  /** Panel note for a strand whose IDs at this level are entered on its sub-strands. */
+  function idBox(id, level) {
+    const kids = taughtKids(id, level);
+    return `<div class="id-box">
+      <b>Understanding IDs are entered on the sub-strands.</b>
+      At ${LV[level].name} level ${kids.length === 1 ? 'this sub-strand is' : 'these sub-strands are'} the lowest level, so each gives its understandings their own IDs:
+      <ul>${kids.map(k => `<li><button data-action="edit-cell" data-id="${k.id}" data-level="${level}">${esc(k.name) || 'Untitled'}</button></li>`).join('')}</ul>
+    </div>`;
+  }
   const statusText = st => ({ own: 'own statements', inherit: 'inherits from parent', na: 'not taught', orphan: 'needs attention' }[st]);
 
   function cellDrawer() {
@@ -374,7 +411,21 @@
         body = `<div class="explain inh-explain" style="--lc:var(--${level})">
           <div class="flow">${[...chain].reverse().map(p => `<span class="flow-node ${p.id === r.source.id ? 'src' : ''}">${esc(p.name)}</span><span class="flow-arrow">↓</span>`).join('')}<span class="flow-node here">${esc(s.name)}</span></div>
           <p>These statements are written on <b>${esc(r.source.name)}</b>. Edit them there and every sub-strand that inherits them updates automatically.</p>
-          ${stmtList(r.statements, 'faded big')}
+          ${isLeaf(id, level) ? `
+            <p class="id-lead">This is the lowest level for <b>${esc(s.name)}</b> at ${L.name}, so give each understanding its own ID here.</p>
+            <div class="inh-ids">${r.statements.map((t, i) => `
+              <div class="inh-id-row">
+                <span class="stmt-num">${i + 1}</span>
+                <div class="stmt-fields">
+                  <label class="sid-field">
+                    <span>Understanding ID</span>
+                    <input data-icode="${i}" value="${esc(cur.codes[i] || '')}" placeholder="e.g. TCH 2-01" aria-label="Understanding ID for inherited statement ${i + 1}" autocomplete="off" spellcheck="false">
+                  </label>
+                  <p class="inh-text">${t.text.trim() ? esc(t.text) : '<em>Empty statement</em>'}</p>
+                  <p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(cur.codes[i] || '', id, level, i)))}</p>
+                </div>
+              </div>`).join('')}
+            </div>` : stmtList(r.statements, 'faded big') + idBox(id, level)}
           <div class="btn-row">
             <button class="btn" data-action="edit-cell" data-id="${r.source.id}" data-level="${level}">Edit at source</button>
             <button class="btn primary" data-action="override">Override — write own</button>
@@ -384,17 +435,19 @@
       }
     } else {
       const heirs = inheritorsOf(id, level);
+      const leaf = isLeaf(id, level);
       body = `<div class="stmt-editor" style="--lc:var(--${level})">
+        ${leaf ? '' : idBox(id, level)}
         ${cur.statements.map((t, i) => `
           <div class="stmt-row">
             <span class="stmt-num">${i + 1}</span>
             <div class="stmt-fields">
-              <label class="sid-field">
+              ${leaf ? `<label class="sid-field">
                 <span>Understanding ID</span>
                 <input data-stmt="${i}" data-part="code" value="${esc(t.code)}" placeholder="e.g. SCN 1-01" aria-label="Understanding ID for statement ${i + 1}" autocomplete="off" spellcheck="false">
-              </label>
+              </label>` : ''}
               <textarea class="autosize" rows="2" data-stmt="${i}" data-part="text" aria-label="Understanding statement ${i + 1}" placeholder="Learners understand that…">${esc(t.text)}</textarea>
-              <p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(t.code, id, level, i)))}</p>
+              ${leaf ? `<p class="dup-warn" id="dup-${i}" role="status">${esc(clashText(codeClashes(t.code, id, level, i)))}</p>` : ''}
             </div>
             <button class="icon-btn" data-action="del-stmt" data-i="${i}" title="Remove statement" aria-label="Remove statement ${i + 1}">×</button>
           </div>`).join('')}
@@ -493,14 +546,19 @@
       if (m === 'na') delete s.levels[l];
       else {
         const prev = s.levels[l] || { statements: [] };
-        s.levels[l] = { mode: m, statements: prev.statements };
+        s.levels[l] = { mode: m, statements: prev.statements, codes: prev.codes || [] };
         if (m === 'own' && !prev.statements.length) s.levels[l].statements = [blankStmt()];
       }
       commit();
     },
     override() {
       const r = resolve(ui.drawer.id, ui.drawer.level);
-      idx[ui.drawer.id].s.levels[ui.drawer.level] = { mode: 'own', statements: r.statements ? copyStmts(r.statements) : [blankStmt()] };
+      // Keep the IDs this strand gave the inherited statements; the source's own IDs stay with the source.
+      const codes = idx[ui.drawer.id].s.levels[ui.drawer.level]?.codes || [];
+      idx[ui.drawer.id].s.levels[ui.drawer.level] = {
+        mode: 'own', codes,
+        statements: r.statements ? r.statements.map((t, i) => ({ code: codes[i] || '', text: t.text })) : [blankStmt()]
+      };
       commit();
       $('#drawer [data-stmt="0"][data-part="text"]')?.focus();
     },
@@ -508,7 +566,7 @@
       const n = idx[ui.drawer.id];
       const r = resolve(n.parent.id, ui.drawer.level);
       const L = n.s.levels[ui.drawer.level];
-      L.statements = [...L.statements.filter(t => t.text.trim() || t.code.trim()), ...copyStmts(r.statements)];
+      L.statements = [...L.statements.filter(t => t.text.trim() || t.code.trim()), ...r.statements.map(t => ({ code: '', text: t.text }))];
       commit();
     },
     'add-stmt'() {
@@ -516,7 +574,10 @@
       L.statements.push(blankStmt());
       commit();
       // Start at the ID box so every new statement gets the chance of an ID.
-      const all = $$('#drawer [data-part="code"]'); all[all.length - 1]?.focus();
+      // Lowest level: start at the ID box. Otherwise IDs live on sub-strands, so start at the text.
+      const all = $$('#drawer [data-part="code"]');
+      const texts = $$('#drawer [data-part="text"]');
+      (all.length ? all[all.length - 1] : texts[texts.length - 1])?.focus();
     },
     'del-stmt'(t) {
       const L = idx[ui.drawer.id].s.levels[ui.drawer.level];
@@ -539,7 +600,7 @@
       p.children.push(s);
       ui.collapsed.delete(p.id);
       reindex();
-      LEVELS.forEach(l => { if (canInherit(s.id, l.key)) s.levels[l.key] = { mode: 'inherit', statements: [] }; });
+      LEVELS.forEach(l => { if (canInherit(s.id, l.key)) s.levels[l.key] = { mode: 'inherit', statements: [], codes: [] }; });
       save(); openDrawer({ type: 'strand', id: s.id });
       selectName();
     },
@@ -607,6 +668,15 @@
       area().bigIdeas[+t.dataset.idea][t.dataset.ifield] = t.value; save();
     } else if (t.dataset.sfield) {
       idx[ui.drawer.id].s[t.dataset.sfield] = t.value; save(); renderBody();
+    } else if (t.dataset.icode != null) {
+      // ID for an inherited statement, stored on this (lowest-level) strand.
+      const i = +t.dataset.icode;
+      const L = idx[ui.drawer.id].s.levels[ui.drawer.level];
+      L.codes ||= [];
+      L.codes[i] = t.value;
+      save(); renderBody();
+      const w = $(`#dup-${i}`);
+      if (w) w.textContent = clashText(codeClashes(t.value, ui.drawer.id, ui.drawer.level, i));
     } else if (t.dataset.stmt != null) {
       const i = +t.dataset.stmt, part = t.dataset.part;
       idx[ui.drawer.id].s.levels[ui.drawer.level].statements[i][part] = t.value;
