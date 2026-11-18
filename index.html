@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Curriculum Designer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>Curriculum Designer</span>
+    </div>
+    <div class="area-switch">
+      <label for="areaSelect" class="sr-only">Curriculum area</label>
+      <select id="areaSelect"></select>
+      <button class="btn ghost" data-action="new-area">+ New area</button>
+    </div>
+    <div class="top-actions">
+      <span id="saved" class="saved">Saved</span>
+      <button class="btn ghost" data-action="export">Export</button>
+      <button class="btn ghost" data-action="import">Import</button>
+      <button class="btn ghost" data-action="reset">Reset demo</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="hero"></section>
+
+    <section class="toolbar">
+      <div class="seg" role="tablist" aria-label="View">
+        <button data-action="view" data-view="matrix" role="tab">Strands × Levels</button>
+        <button data-action="view" data-view="level" role="tab">One level at a time</button>
+      </div>
+      <div class="legend" aria-label="Legend">
+        <span class="lg"><i class="sw own"></i>Own understanding statements</span>
+        <span class="lg"><i class="sw inh"></i>Inherited from parent strand</span>
+        <span class="lg"><i class="sw na"></i>Not taught at this level</span>
+        <span class="lg"><i class="sw orphan"></i>Needs attention</span>
+      </div>
+    </section>
+
+    <section id="body"></section>
+  </main>
+
+  <aside id="drawer" aria-hidden="true"></aside>
+  <input type="file" id="importFile" accept="application/json" hidden>
+
+  <script src="seed.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
