@@ -27,6 +27,25 @@ Once an understanding has an ID, the **Knows & Dos** page (switch at the top) le
 - Add **images** to a statement by uploading or pasting them. Images are downscaled and stored in the browser with the rest of the data, so very large numbers of images can fill the browser's storage; use Export to keep a copy.
 - **Preview** shows the finished layout.
 
+## Cross-cutting themes
+
+The **Themes** page holds the cross-cutting themes shared by every curriculum area. It starts with:
+
+| Code | Theme |
+|---|---|
+| CCCAP | Career and Pathways |
+| CCC | Creativity |
+| CCDV | Democratic Values |
+| CCDS | Digital Skills |
+| CCE | Entrepreneurship |
+| CCLFS | Learning for Sustainability |
+| CCMAF | Money and Finance |
+| CCSJE | Social Justice and Equalities |
+
+Codes and names can be edited in place, and themes can be added or deleted (deleting a theme removes its tag everywhere). Selecting a theme lists every understanding tagged with it across the curriculum, with counts at each level.
+
+Understandings are tagged on the **Knows & Dos** page: the *Cross-cutting themes* row under the understanding has **+ Add theme** to tick themes on or off, and × to remove one.
+
 ## Dashboard
 
 The **Dashboard** page summarises the number of understanding, know and do statements across the full curriculum (or one curriculum area), at each level: headline totals, a column chart per measure, a table by level, and a table by curriculum area and level. Understanding statements are counted at the lowest level of each strand, where each has its own understanding ID.

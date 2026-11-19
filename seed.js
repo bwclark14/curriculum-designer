@@ -316,5 +316,36 @@
     ]
   });
 
-  window.SEED = { currentId: sciences.id, areas: [sciences, technologies, arts] };
+  /* --- Cross-cutting themes, shared by every curriculum area --- */
+  const themes = [
+    ['CCCAP', 'Career and Pathways'],
+    ['CCC', 'Creativity'],
+    ['CCDV', 'Democratic Values'],
+    ['CCDS', 'Digital Skills'],
+    ['CCE', 'Entrepreneurship'],
+    ['CCLFS', 'Learning for Sustainability'],
+    ['CCMAF', 'Money and Finance'],
+    ['CCSJE', 'Social Justice and Equalities']
+  ].map(([code, name]) => ({ id: 'theme-' + code.toLowerCase(), code, name }));
+
+  /** Tag the `i`th understanding of the first strand called `name` at `lvl` with theme codes. */
+  function tag(area, name, lvl, i, codes) {
+    const find = list => { for (const s of list) { if (s.name === name) return s; const f = find(s.children); if (f) return f; } return null; };
+    const L = find(area.strands).levels[lvl];
+    const blank = () => ({ sequenced: false, collections: [], themes: [] });
+    let kd;
+    if (L.mode === 'own') kd = L.statements[i].kd = L.statements[i].kd || blank();
+    else { L.kd = L.kd || []; kd = L.kd[i] = L.kd[i] || blank(); }
+    kd.themes = codes.map(c => 'theme-' + c.toLowerCase());
+  }
+  tag(sciences, 'Nature', 'first', 0, ['CCLFS']);
+  tag(sciences, 'Food', 'first', 0, ['CCLFS', 'CCSJE']);
+  tag(sciences, 'Energy sources and sustainability', 'third', 0, ['CCLFS', 'CCMAF']);
+  tag(sciences, 'Topical science', 'fourth', 0, ['CCDV', 'CCSJE']);
+  tag(technologies, 'Computing', 'third', 0, ['CCDS', 'CCCAP']);
+  tag(technologies, 'Engineering', 'first', 0, ['CCE', 'CCC']);
+  tag(technologies, 'Design and making', 'fourth', 0, ['CCLFS', 'CCE']);
+  tag(arts, 'Art and design', 'second', 0, ['CCC', 'CCE']);
+
+  window.SEED = { currentId: sciences.id, areas: [sciences, technologies, arts], themes };
 })();

@@ -22,12 +22,13 @@
   /* ---------- state ---------- */
   let db = load();
   const ui = {
-    page: location.hash.startsWith('#knows-and-dos') ? 'kd' : location.hash === '#dashboard' ? 'dash' : 'structure',
+    page: location.hash.startsWith('#knows-and-dos') ? 'kd' : location.hash === '#dashboard' ? 'dash' : location.hash === '#themes' ? 'themes' : 'structure',
     view: 'matrix', focus: 'second', collapsed: new Set(), drawer: null,
     // Knows & Dos page: selected understanding, list filters, edit/preview, open editor
     kd: { sel: selFromHash(), level: 'all', q: '', preview: false },
     ed: null,
-    dash: { area: 'all' }        // Dashboard scope: 'all' areas or one area id
+    dash: { area: 'all' },       // Dashboard scope: 'all' areas or one area id
+    themes: { sel: null, msg: '' }   // Themes page: selected theme id, add-form message
   };
 
   // The open understanding is kept in the URL (#knows-and-dos/<strand>/<level>/<n>) so a reload or link returns to it.
@@ -69,6 +70,10 @@
         : { name: b.name || '', description: b.description || '' });
       fixStrands(a.strands);
     });
+    // Cross-cutting themes are shared by every curriculum area. Older saved data gets the default list.
+    d.themes = Array.isArray(d.themes)
+      ? d.themes.map(t => ({ id: t.id || uid(), code: t.code || '', name: t.name || '' }))
+      : JSON.parse(JSON.stringify(window.SEED.themes || []));
     return d;
   }
   // Function declarations (not consts) so they are available when load() runs at start-up.
@@ -81,12 +86,13 @@
   /* Knows & dos for one understanding:
      { sequenced, collections: [{ id, name, sequenced, knows: [item], dos: [item] }] }
      item: { id, text (may contain $LaTeX$), images: [{ id, src (data URL), alt }] } */
-  function newKD() { return { sequenced: false, collections: [] }; }
+  function newKD() { return { sequenced: false, collections: [], themes: [] }; }
   function newCollection() { return { id: uid(), name: '', sequenced: false, knows: [], dos: [] }; }
   function normKD(k) {
     if (!k) return null;
     return {
       sequenced: !!k.sequenced,
+      themes: Array.isArray(k.themes) ? k.themes.filter(Boolean) : [],     // cross-cutting theme ids
       collections: (k.collections || []).map(c => ({
         id: c.id || uid(), name: c.name || '', sequenced: !!c.sequenced,
         knows: (c.knows || []).map(normItem), dos: (c.dos || []).map(normItem)
@@ -238,6 +244,7 @@
     renderPage();
     if (ui.page === 'kd') { renderDrawer(); renderKD(); return; }
     if (ui.page === 'dash') { renderDrawer(); renderDash(); return; }
+    if (ui.page === 'themes') { renderDrawer(); renderThemes(); return; }
     renderHero();
     renderBody();
     renderDrawer();
@@ -248,11 +255,13 @@
     $('#structure-page').hidden = ui.page !== 'structure';
     $('#kd-page').hidden = ui.page !== 'kd';
     $('#dash-page').hidden = ui.page !== 'dash';
+    $('#themes-page').hidden = ui.page !== 'themes';
+    if (ui.page !== 'kd') ui.kd.picker = false;
     $('#dashTip').hidden = true;
     $$('.pages [data-page]').forEach(b => b.setAttribute('aria-current', b.dataset.page === ui.page ? 'page' : 'false'));
     if (ui.page !== 'structure') ui.drawer = null;
     // Knows & Dos keeps its own hash (with the open understanding) in renderKD.
-    const hash = ui.page === 'dash' ? '#dashboard' : ui.page === 'structure' ? '' : null;
+    const hash = { dash: '#dashboard', themes: '#themes', structure: '' }[ui.page] ?? null;
     if (hash !== null && location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
   }
 
@@ -891,6 +900,7 @@
         </aside>
         <section class="kd-main">${sel ? kdMain(sel, all) : kdEmpty(all)}</section>
       </div>`;
+    if (ui.kd.picker) placeThemeMenu();
   }
 
   function kdNavList(all) {
@@ -909,6 +919,7 @@
             <span class="kd-u-top"><span class="sid">${esc(u.code)}</span><span class="kd-u-count ${K || D ? '' : 'zero'}">${K || D ? `K ${K} · D ${D}` : 'none yet'}</span></span>
             <span class="kd-u-path">${u.path.map(p => esc(p.name)).join(' › ')}</span>
             <span class="kd-u-text">${esc(u.text) || '<em>Empty statement</em>'}</span>
+            ${themeCodesHTML(u)}
           </button>`
         : `<button class="kd-u noid" data-action="kd-fix-id" data-id="${u.id}" data-level="${u.level}" title="Give this statement an understanding ID in Structure first">
             <span class="kd-u-top"><span class="sid missing">ID needed</span></span>
@@ -941,6 +952,7 @@
           <nav class="crumbs kd-crumbs">${esc(area().name)}${sel.path.map(p => ` <span>›</span> ${esc(p.name)}`).join('')}</nav>
         </div>
         <p class="kd-understanding">${esc(sel.text) || '<em>Empty statement</em>'}</p>
+        ${themeTagsHTML(sel)}
         ${sel.inherited ? `<p class="kd-inh">↑ Statement inherited from ${esc(sel.source.name)}; the ID and these knows and dos belong to ${esc(sel.path[sel.path.length - 1].name)}.</p>` : ''}
         <div class="kd-head-actions">
           <button class="btn ghost" data-action="kd-structure">View in Structure</button>
@@ -1503,6 +1515,193 @@
     const r = el.getBoundingClientRect(); showTip(el, r.left + r.width / 2, r.top + r.height / 3);
   });
 
+  /* =====================================================================
+     Cross-cutting themes
+     A shared list of themes (db.themes). Understandings are tagged with them on
+     the Knows & Dos page; the tags live with the understanding's knows & dos.
+     ===================================================================== */
+  const themeById = id => db.themes.find(t => t.id === id);
+  /** Theme objects tagged on an understanding, in the order of the theme list. */
+  function themesOf(ref) {
+    const ids = getKD(ref, false)?.themes || [];
+    return db.themes.filter(t => ids.includes(t.id));
+  }
+  const themeChip = (t, removable) => `<span class="theme-chip" title="${esc(t.name)}">
+      <span class="theme-code">${esc(t.code || '—')}</span><span class="theme-name">${esc(t.name || 'Untitled theme')}</span>
+      ${removable ? `<button class="theme-x" data-action="theme-untag" data-theme="${t.id}" aria-label="Remove ${esc(t.name)}">×</button>` : ''}
+    </span>`;
+
+  function themeCodesHTML(u) {
+    const ts = themesOf(u);
+    return ts.length ? `<span class="kd-u-themes">${ts.map(t => esc(t.code)).join(' · ')}</span>` : '';
+  }
+
+  /** The theme tags row in the Knows & Dos header, with a picker to add or remove themes. */
+  function themeTagsHTML(sel) {
+    const tagged = themesOf(sel), ids = tagged.map(t => t.id);
+    return `<div class="kd-themes">
+      <span class="kd-themes-label">Cross-cutting themes</span>
+      ${tagged.map(t => themeChip(t, !ui.kd.preview)).join('') || '<span class="muted-note">None yet</span>'}
+      ${ui.kd.preview ? '' : `<div class="theme-pick">
+        <button class="kd-add" data-action="theme-picker" aria-expanded="${!!ui.kd.picker}" aria-haspopup="true">+ Add theme</button>
+        ${ui.kd.picker ? `<div class="theme-menu" role="group" aria-label="Cross-cutting themes">
+          ${db.themes.length ? db.themes.map(t => `<label class="theme-opt">
+              <input type="checkbox" data-theme-toggle="${t.id}" ${ids.includes(t.id) ? 'checked' : ''}>
+              <span class="theme-code">${esc(t.code || '—')}</span><span>${esc(t.name || 'Untitled theme')}</span>
+            </label>`).join('') : '<p class="muted-note">No themes defined yet.</p>'}
+          <button class="link theme-manage" data-action="page" data-page="themes">Manage themes →</button>
+        </div>` : ''}
+      </div>`}
+    </div>`;
+  }
+
+  /** Open the theme menu leftwards when it would run off the right edge of the window. */
+  function placeThemeMenu() {
+    const m = $('.theme-menu');
+    if (!m) return;
+    m.classList.remove('flip');
+    if (m.getBoundingClientRect().right > window.innerWidth - 8) m.classList.add('flip');
+  }
+
+  function setTag(themeId, on) {
+    const kd = getKD(ui.kd.sel, true);
+    kd.themes = on ? [...new Set([...kd.themes, themeId])] : kd.themes.filter(x => x !== themeId);
+    save();
+  }
+
+  /** Every lowest-level understanding in every area, with the themes it is tagged with. */
+  function allTagged() {
+    const keep = db.currentId, out = [];
+    try {
+      db.areas.forEach(a => {
+        db.currentId = a.id; reindex();
+        understandings().forEach(u => out.push({ ...u, area: a, themeIds: getKD(u, false)?.themes || [] }));
+      });
+    } finally { db.currentId = keep; reindex(); }
+    return out;
+  }
+
+  function renderThemes() {
+    const all = allTagged();
+    const count = id => all.filter(u => u.themeIds.includes(id)).length;
+    if (ui.themes.sel && !themeById(ui.themes.sel)) ui.themes.sel = null;
+    if (!ui.themes.sel && db.themes.length) ui.themes.sel = db.themes[0].id;
+    const sel = ui.themes.sel && themeById(ui.themes.sel);
+
+    const list = `
+      <section class="dash-card th-list">
+        <h3>Themes</h3>
+        <p class="hint">Edit a code or name in place. Changes apply everywhere the theme is used.</p>
+        <div class="table-scroll"><table class="dash-table th-table">
+          <thead><tr><th scope="col">Code</th><th scope="col">Theme</th><th scope="col">Tagged</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+          <tbody>${db.themes.map(t => `
+            <tr class="${sel && t.id === sel.id ? 'on' : ''}">
+              <td><input class="th-code" data-thfield="code" data-th="${t.id}" value="${esc(t.code)}" aria-label="Theme code" spellcheck="false"></td>
+              <td><input class="th-name" data-thfield="name" data-th="${t.id}" value="${esc(t.name)}" aria-label="Theme name"></td>
+              <td><button class="th-count" data-action="theme-select" data-theme="${t.id}" aria-label="Show understandings tagged ${esc(t.name)}">${plural(count(t.id), 'understanding')} →</button></td>
+              <td><button class="icon-btn sm danger" data-action="theme-del" data-theme="${t.id}" aria-label="Delete ${esc(t.name)}" title="Delete theme">×</button></td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        <form class="th-add" data-form="theme-add">
+          <label><span>Code</span><input name="code" placeholder="e.g. CCHW" spellcheck="false" autocomplete="off" required></label>
+          <label><span>Theme name</span><input name="name" placeholder="e.g. Health and Wellbeing" autocomplete="off" required></label>
+          <button class="btn primary" type="submit">+ Add theme</button>
+        </form>
+        <p class="dup-warn th-msg" role="status">${esc(ui.themes.msg)}</p>
+      </section>`;
+
+    let detail = `<section class="dash-card th-detail"><p class="muted-note">Add a theme to get started.</p></section>`;
+    if (sel) {
+      const tagged = all.filter(u => u.themeIds.includes(sel.id));
+      const perLevel = LEVELS.map(l => ({ l, n: tagged.filter(u => u.level === l.key).length }));
+      let items = '';
+      db.areas.forEach(a => {
+        const inArea = tagged.filter(u => u.area.id === a.id);
+        if (!inArea.length) return;
+        items += `<h4 class="th-area">${esc(a.name)} <span class="muted">${plural(inArea.length, 'understanding')}</span></h4><ul class="th-items">${inArea.map(u => `
+          <li style="--lc:var(--${u.level})">
+            <span class="lvl-pill">${LV[u.level].name}</span>
+            <div class="th-item-main">
+              <span class="th-item-top">${u.code ? `<span class="sid">${esc(u.code)}</span>` : '<span class="sid missing">ID needed</span>'}<span class="kd-u-path">${u.path.map(p => esc(p.name)).join(' › ')}</span></span>
+              <span class="th-item-text">${esc(u.text)}</span>
+            </div>
+            <button class="btn ghost" data-action="theme-open" data-area="${a.id}" data-id="${u.id}" data-level="${u.level}" data-i="${u.i}">Open in Knows &amp; Dos →</button>
+          </li>`).join('')}</ul>`;
+      });
+      detail = `
+        <section class="dash-card th-detail">
+          <div class="th-detail-head">${themeChip(sel, false)}</div>
+          <p class="hint">Understandings tagged with this theme across the full curriculum.</p>
+          <div class="th-levels">${perLevel.map(({ l, n }) => `<span class="th-level ${n ? '' : 'zero'}" style="--lc:var(--${l.key})"><span class="lvl-pill">${l.name}</span><b>${n}</b></span>`).join('')}</div>
+          ${items || `<div class="th-empty"><p>No understandings are tagged with <b>${esc(sel.name)}</b> yet.</p>
+            <p class="hint">Open an understanding on the Knows &amp; Dos page and use <b>+ Add theme</b>.</p>
+            <button class="btn" data-action="page" data-page="kd">Go to Knows &amp; Dos</button></div>`}
+        </section>`;
+    }
+
+    $('#themes-page').innerHTML = `
+      <header class="dash-head">
+        <div>
+          <h1>Cross-cutting themes</h1>
+          <p>Themes that run across the curriculum. Tag understandings with them on the Knows &amp; Dos page.</p>
+        </div>
+      </header>
+      <div class="th-layout">${list}${detail}</div>`;
+  }
+
+  Object.assign(actions, {
+    'theme-picker'() { ui.kd.picker = !ui.kd.picker; renderKD(); if (ui.kd.picker) $('.theme-menu input')?.focus(); },
+    'theme-untag'(t) { setTag(t.dataset.theme, false); renderKD(); },
+    'theme-select'(t) { ui.themes.sel = t.dataset.theme; renderThemes(); },
+    'theme-del'(t) {
+      const th = themeById(t.dataset.theme);
+      const n = allTagged().filter(u => u.themeIds.includes(th.id)).length;
+      if (!confirm(`Delete the theme “${th.code} ${th.name}”?${n ? ` It will be removed from ${plural(n, 'understanding')}.` : ''}`)) return;
+      db.themes = db.themes.filter(x => x !== th);
+      // Remove the tag everywhere it is used.
+      const strip = kd => { if (kd) kd.themes = kd.themes.filter(x => x !== th.id); };
+      const walk = list => list.forEach(s => {
+        Object.values(s.levels).forEach(L => { L.statements.forEach(st => strip(st.kd)); (L.kd || []).forEach(strip); });
+        walk(s.children);
+      });
+      db.areas.forEach(a => walk(a.strands));
+      if (ui.themes.sel === th.id) ui.themes.sel = null;
+      save(); renderThemes();
+    },
+    'theme-open'(t) {
+      db.currentId = t.dataset.area; ui.drawer = null;
+      ui.kd.sel = { id: t.dataset.id, level: t.dataset.level, i: +t.dataset.i };
+      ui.page = 'kd'; save(); render(); window.scrollTo(0, 0);
+    }
+  });
+
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.themeToggle) { setTag(t.dataset.themeToggle, t.checked); renderKD(); $(`[data-theme-toggle="${t.dataset.themeToggle}"]`)?.focus(); }
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.th && t.dataset.thfield) {
+      const th = themeById(t.dataset.th);
+      if (th) { th[t.dataset.thfield] = t.value; save(); }
+    }
+  });
+  document.addEventListener('submit', e => {
+    const f = e.target;
+    if (f.dataset.form !== 'theme-add') return;
+    e.preventDefault();
+    // f.name is the form's own name attribute, so read the fields through f.elements.
+    const code = f.elements.code.value.trim(), name = f.elements['name'].value.trim();
+    if (!code || !name) return;
+    if (db.themes.some(t => t.code.trim().toLowerCase() === code.toLowerCase())) {
+      ui.themes.msg = `⚠ A theme with the code ${code} already exists.`;
+      renderThemes(); $('.th-add [name="code"]').focus(); return;
+    }
+    const th = { id: uid(), code, name };
+    db.themes.push(th); ui.themes.sel = th.id; ui.themes.msg = '';
+    save(); renderThemes(); $('.th-add [name="code"]').focus();
+  });
+
   function kdLink(id, level, i) {
     const { K, D } = kdCount({ id, level, i });
     return `<button class="kd-link" data-action="open-kd" data-id="${id}" data-level="${level}" data-i="${i}">Knows &amp; Dos <span>K ${K} · D ${D}</span> →</button>`;
@@ -1510,6 +1709,7 @@
 
   /* ---------- events ---------- */
   document.addEventListener('click', e => {
+    if (ui.kd.picker && !e.target.closest('.theme-pick')) { ui.kd.picker = false; if (ui.page === 'kd') renderKD(); }
     const t = e.target.closest('[data-action]');
     if (!t || t.disabled) return;
     const fn = actions[t.dataset.action];
@@ -1518,6 +1718,7 @@
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && ui.ed) { closeEditor(); return; }
+    if (e.key === 'Escape' && ui.kd.picker) { ui.kd.picker = false; renderKD(); $('[data-action="theme-picker"]')?.focus(); return; }
     if (ui.ed && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(); return; }
     if (e.key === 'Escape' && ui.drawer) { actions['close-drawer'](); return; }
     const t = e.target;
