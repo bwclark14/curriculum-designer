@@ -27,6 +27,10 @@ Once an understanding has an ID, the **Knows & Dos** page (switch at the top) le
 - Add **images** to a statement by uploading or pasting them. Images are downscaled and stored in the browser with the rest of the data, so very large numbers of images can fill the browser's storage; use Export to keep a copy.
 - **Preview** shows the finished layout.
 
+## Dashboard
+
+The **Dashboard** page summarises the number of understanding, know and do statements across the full curriculum (or one curriculum area), at each level: headline totals, a column chart per measure, a table by level, and a table by curriculum area and level. Understanding statements are counted at the lowest level of each strand, where each has its own understanding ID.
+
 ## Views
 
 - **Strands × Levels** – a grid of strands against levels. Solid cards are own statements, hatched cards are inherited (labelled with their source), empty cells are levels where the strand isn't taught, and red dashed cards need attention.

@@ -22,11 +22,12 @@
   /* ---------- state ---------- */
   let db = load();
   const ui = {
-    page: location.hash.startsWith('#knows-and-dos') ? 'kd' : 'structure',
+    page: location.hash.startsWith('#knows-and-dos') ? 'kd' : location.hash === '#dashboard' ? 'dash' : 'structure',
     view: 'matrix', focus: 'second', collapsed: new Set(), drawer: null,
     // Knows & Dos page: selected understanding, list filters, edit/preview, open editor
     kd: { sel: selFromHash(), level: 'all', q: '', preview: false },
-    ed: null
+    ed: null,
+    dash: { area: 'all' }        // Dashboard scope: 'all' areas or one area id
   };
 
   // The open understanding is kept in the URL (#knows-and-dos/<strand>/<level>/<n>) so a reload or link returns to it.
@@ -236,6 +237,7 @@
     renderTop();
     renderPage();
     if (ui.page === 'kd') { renderDrawer(); renderKD(); return; }
+    if (ui.page === 'dash') { renderDrawer(); renderDash(); return; }
     renderHero();
     renderBody();
     renderDrawer();
@@ -243,12 +245,15 @@
 
   /** Switch between the Structure page and the Knows & Dos page. */
   function renderPage() {
-    const kd = ui.page === 'kd';
-    $('#structure-page').hidden = kd;
-    $('#kd-page').hidden = !kd;
+    $('#structure-page').hidden = ui.page !== 'structure';
+    $('#kd-page').hidden = ui.page !== 'kd';
+    $('#dash-page').hidden = ui.page !== 'dash';
+    $('#dashTip').hidden = true;
     $$('.pages [data-page]').forEach(b => b.setAttribute('aria-current', b.dataset.page === ui.page ? 'page' : 'false'));
-    if (kd) ui.drawer = null;
-    if (!kd && location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if (ui.page !== 'structure') ui.drawer = null;
+    // Knows & Dos keeps its own hash (with the open understanding) in renderKD.
+    const hash = ui.page === 'dash' ? '#dashboard' : ui.page === 'structure' ? '' : null;
+    if (hash !== null && location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
   }
 
   function renderTop() {
@@ -1349,6 +1354,154 @@
     drag = null; clearDrop();
   });
   document.addEventListener('dragend', () => { drag = null; clearDrop(); });
+
+  /* =====================================================================
+     Dashboard: understanding, know and do statements across the curriculum,
+     at each level. Understandings are counted at the lowest level (each gets
+     its own ID there, including sub-strands that inherit their statement).
+     ===================================================================== */
+  const MEASURES = [
+    { key: 'u', title: 'Understanding statements', short: 'Understandings' },
+    { key: 'k', title: 'Know statements', short: 'Knows' },
+    { key: 'd', title: 'Do statements', short: 'Dos' }
+  ];
+  const BAR = '#2a78d6';                      // single hue: the level is named on the axis, not by colour
+  const blankStat = () => ({ u: 0, uId: 0, covered: 0, k: 0, d: 0 });
+  const addStat = (a, b) => { for (const k in a) a[k] += b[k]; return a; };
+
+  /** Counts per area and level. Index helpers work on the current area, so switch to each one in turn. */
+  function curriculumStats() {
+    const keep = db.currentId, byArea = {};
+    try {
+      db.areas.forEach(a => {
+        db.currentId = a.id; reindex();
+        const per = Object.fromEntries(LEVELS.map(l => [l.key, blankStat()]));
+        understandings().forEach(u => {
+          const { K, D } = kdCount(u), t = per[u.level];
+          t.u++; if (u.code) t.uId++; if (K || D) t.covered++; t.k += K; t.d += D;
+        });
+        byArea[a.id] = per;
+      });
+    } finally { db.currentId = keep; reindex(); }
+    return byArea;
+  }
+
+  function niceScale(max) {
+    if (max <= 4) return { top: 4, step: 1 };
+    const raw = max / 4, mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 5, 10].map(m => m * mag).find(s => s >= raw);
+    return { top: step * 4, step };
+  }
+  const fmt = n => n.toLocaleString('en-GB');
+  const pct = (a, b) => b ? Math.round((a / b) * 100) : 0;
+
+  /** One column chart: a measure at each level. */
+  function columnChart(m, lv) {
+    const vals = LEVELS.map(l => lv[l.key][m.key]);
+    const total = vals.reduce((a, b) => a + b, 0);
+    const { top, step } = niceScale(Math.max(...vals));
+    const W = 340, H = 200, L = 34, R = 6, T = 10, B = 28, pw = W - L - R, ph = H - T - B;
+    const band = pw / LEVELS.length, bw = 24, y0 = T + ph;
+    const y = v => y0 - (v / top) * ph;
+    let g = '';
+    for (let v = 0; v <= top; v += step) {
+      g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="${v === 0 ? 'axis' : 'grid'}"/>
+        <text x="${L - 6}" y="${y(v) + 4}" class="tick" text-anchor="end">${fmt(v)}</text>`;
+    }
+    LEVELS.forEach((l, i) => {
+      const v = vals[i], cx = L + band * i + band / 2, x = cx - bw / 2, yt = y(v), r = Math.min(4, y0 - yt);
+      if (v > 0) g += `<path class="bar" d="M${x},${y0} V${yt + r} Q${x},${yt} ${x + r},${yt} H${x + bw - r} Q${x + bw},${yt} ${x + bw},${yt + r} V${y0} Z" fill="${BAR}"/>`;
+      g += `<text x="${cx}" y="${H - 8}" class="xlab" text-anchor="middle">${l.name}</text>
+        <rect class="hit" x="${L + band * i}" y="${T}" width="${band}" height="${ph}" tabindex="0"
+          data-tip="${esc(`<b>${l.name}</b><span>${fmt(v)} ${m.short.toLowerCase()}</span>`)}"
+          aria-label="${l.name}: ${v} ${m.title.toLowerCase()}"/>`;
+    });
+    return `<figure class="dash-card chart">
+      <figcaption><h3>${m.title}</h3><span class="dash-total">${fmt(total)} in total</span></figcaption>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${m.title} at each level">${g}</svg>
+    </figure>`;
+  }
+
+  function renderDash() {
+    const byArea = curriculumStats();
+    if (ui.dash.area !== 'all' && !byArea[ui.dash.area]) ui.dash.area = 'all';
+    const areas = ui.dash.area === 'all' ? db.areas : db.areas.filter(a => a.id === ui.dash.area);
+    const lv = Object.fromEntries(LEVELS.map(l => [l.key, areas.reduce((t, a) => addStat(t, byArea[a.id][l.key]), blankStat())]));
+    const tot = LEVELS.reduce((t, l) => addStat(t, { ...lv[l.key] }), blankStat());
+    const scopeName = ui.dash.area === 'all' ? 'the full curriculum' : areas[0].name;
+
+    const tiles = `
+      <div class="dash-tiles">
+        <div class="dash-card tile"><span class="tile-label">Understanding statements</span><b class="tile-value">${fmt(tot.u)}</b><span class="tile-sub">${fmt(tot.uId)} with an understanding ID</span></div>
+        <div class="dash-card tile"><span class="tile-label">Know statements</span><b class="tile-value">${fmt(tot.k)}</b><span class="tile-sub">${tot.covered ? `${(tot.k / tot.covered).toFixed(1)} per supported understanding` : 'None written yet'}</span></div>
+        <div class="dash-card tile"><span class="tile-label">Do statements</span><b class="tile-value">${fmt(tot.d)}</b><span class="tile-sub">${tot.covered ? `${(tot.d / tot.covered).toFixed(1)} per supported understanding` : 'None written yet'}</span></div>
+        <div class="dash-card tile"><span class="tile-label">Understandings with knows &amp; dos</span><b class="tile-value">${pct(tot.covered, tot.u)}%</b>
+          <span class="meter" role="meter" aria-valuemin="0" aria-valuemax="${tot.u}" aria-valuenow="${tot.covered}" aria-label="Understandings with knows and dos"><i style="width:${pct(tot.covered, tot.u)}%"></i></span>
+          <span class="tile-sub">${fmt(tot.covered)} of ${fmt(tot.u)}</span></div>
+      </div>`;
+
+    const levelTable = `
+      <div class="dash-card table-card">
+        <h3>By level</h3>
+        <div class="table-scroll"><table class="dash-table">
+          <thead><tr><th scope="col">Level</th><th scope="col">Understandings</th><th scope="col">With an ID</th><th scope="col">With knows &amp; dos</th><th scope="col">Knows</th><th scope="col">Dos</th></tr></thead>
+          <tbody>${LEVELS.map(l => { const r = lv[l.key]; return `<tr>
+            <th scope="row"><span class="lvl-pill" style="--lc:var(--${l.key})">${l.name}</span></th>
+            <td>${fmt(r.u)}</td><td>${fmt(r.uId)}</td><td>${fmt(r.covered)} <span class="muted">(${pct(r.covered, r.u)}%)</span></td><td>${fmt(r.k)}</td><td>${fmt(r.d)}</td></tr>`; }).join('')}</tbody>
+          <tfoot><tr><th scope="row">Total</th><td>${fmt(tot.u)}</td><td>${fmt(tot.uId)}</td><td>${fmt(tot.covered)} <span class="muted">(${pct(tot.covered, tot.u)}%)</span></td><td>${fmt(tot.k)}</td><td>${fmt(tot.d)}</td></tr></tfoot>
+        </table></div>
+      </div>`;
+
+    const areaTable = ui.dash.area !== 'all' ? '' : `
+      <div class="dash-card table-card">
+        <h3>By curriculum area and level</h3>
+        <p class="hint">Each cell shows understandings · knows · dos.</p>
+        <div class="table-scroll"><table class="dash-table area-table">
+          <thead><tr><th scope="col">Curriculum area</th>${LEVELS.map(l => `<th scope="col"><span class="lvl-pill" style="--lc:var(--${l.key})">${l.name}</span></th>`).join('')}<th scope="col">Total</th></tr></thead>
+          <tbody>${db.areas.map(a => {
+            const per = byArea[a.id], t = LEVELS.reduce((s, l) => addStat(s, { ...per[l.key] }), blankStat());
+            const cell = r => r.u || r.k || r.d ? `${fmt(r.u)} · ${fmt(r.k)} · ${fmt(r.d)}` : '<span class="muted">—</span>';
+            return `<tr><th scope="row"><button class="link" data-action="dash-area" data-area="${a.id}">${esc(a.name || 'Untitled area')}</button></th>${LEVELS.map(l => `<td>${cell(per[l.key])}</td>`).join('')}<td><b>${cell(t)}</b></td></tr>`;
+          }).join('')}</tbody>
+        </table></div>
+      </div>`;
+
+    $('#dash-page').innerHTML = `
+      <header class="dash-head">
+        <div>
+          <h1>Curriculum dashboard</h1>
+          <p>Understanding, know and do statements in ${esc(scopeName)}, at each level.</p>
+        </div>
+        <div class="dash-filter" role="group" aria-label="Curriculum area">
+          <button class="kd-lvl ${ui.dash.area === 'all' ? 'on' : ''}" data-action="dash-area" data-area="all">Full curriculum</button>
+          ${db.areas.map(a => `<button class="kd-lvl ${ui.dash.area === a.id ? 'on' : ''}" data-action="dash-area" data-area="${a.id}">${esc(a.name || 'Untitled area')}</button>`).join('')}
+        </div>
+      </header>
+      ${tot.u ? `${tiles}<div class="dash-charts">${MEASURES.map(m => columnChart(m, lv)).join('')}</div>${levelTable}${areaTable}`
+        : `<div class="empty"><h3>Nothing to count yet</h3><p>Write understanding statements in Structure and they will be summarised here.</p><button class="btn primary" data-action="page" data-page="structure">Go to Structure</button></div>`}
+      <p class="hint dash-note">Understanding statements are counted at the lowest level of each strand, where each one has its own understanding ID. Sub-strands that inherit a statement count it as their own understanding.</p>`;
+  }
+  actions['dash-area'] = t => { ui.dash.area = t.dataset.area; renderDash(); };
+
+  // Tooltip for chart columns (mouse and keyboard focus).
+  const tip = $('#dashTip');
+  const showTip = (el, x, y) => {
+    tip.innerHTML = el.dataset.tip; tip.hidden = false;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(window.innerWidth - w - 8, Math.max(8, x - w / 2)) + 'px';
+    tip.style.top = Math.max(8, y - h - 12) + 'px';
+  };
+  document.addEventListener('mousemove', e => {
+    const el = e.target.closest?.('#dash-page [data-tip]');
+    $$('#dash-page .hit.on').forEach(x => x !== el && x.classList.remove('on'));
+    if (!el) { tip.hidden = true; return; }
+    el.classList.add('on'); showTip(el, e.clientX, e.clientY);
+  });
+  document.addEventListener('focusin', e => {
+    const el = e.target.closest?.('#dash-page [data-tip]');
+    if (!el) { if (!e.target.closest?.('#dash-page')) tip.hidden = true; return; }
+    const r = el.getBoundingClientRect(); showTip(el, r.left + r.width / 2, r.top + r.height / 3);
+  });
 
   function kdLink(id, level, i) {
     const { K, D } = kdCount({ id, level, i });

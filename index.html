@@ -25,6 +25,7 @@
     <nav class="pages" aria-label="Pages">
       <button data-action="page" data-page="structure">Structure</button>
       <button data-action="page" data-page="kd">Knows &amp; Dos</button>
+      <button data-action="page" data-page="dash">Dashboard</button>
     </nav>
     <div class="top-actions">
       <span id="saved" class="saved">Saved</span>
@@ -56,10 +57,13 @@
     </div>
 
     <div id="kd-page" hidden></div>
+
+    <div id="dash-page" hidden></div>
   </main>
 
   <aside id="drawer" aria-hidden="true"></aside>
   <div id="modal" hidden></div>
+  <div id="dashTip" class="dash-tip" role="tooltip" hidden></div>
   <input type="file" id="importFile" accept="application/json" hidden>
   <input type="file" id="imageFile" accept="image/*" multiple hidden>
 
